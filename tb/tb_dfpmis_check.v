@@ -141,6 +141,14 @@ always @(posedge `TB.clk) begin
 		n_viol = n_viol + 1; `TB.errors = `TB.errors + 1;
 		$display("FAIL: dfpmis-check: the allocate's fill goes out with FC %0d, the store's is %0d (t=%0d)", `CC.m_fc, `CC.r_fc, t);
 	end
+	// only a copyback store (r_cb) is held off the master port in its st_chk
+	// clock; any other posted store is already on its way to memory there,
+	// and allocating it as well would leave a dirty copy of a write-through
+	// line behind
+	if (ce && `CC.wa_go && `CC.m_req) begin
+		n_viol = n_viol + 1; `TB.errors = `TB.errors + 1;
+		$display("FAIL: dfpmis-check: a store already issued on the master port is allocated (t=%0d)", t);
+	end
 	if (ce && `CC.wa_go) n_wa = n_wa + 1;
 	if (ce && `CC.wa_ok) n_wa_ok = n_wa_ok + 1;
 	if (ce && `CC.wa_v && `CC.cst == 4'd4 && `CC.r_issued && `CC.m_ack && `CC.r_beat == 2'd3) n_wa_fill0 = n_wa_fill0 + 1;

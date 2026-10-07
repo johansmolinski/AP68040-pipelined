@@ -14,7 +14,8 @@
 ;      memory after the push
 ;   2  a byte and a word store miss merge into the fetched line, byte-exact
 ;   3  a store miss whose victim is dirty: the victim is pushed first
-;   5  a store miss to a write-through page still writes through
+;   5  a store miss to a write-through page still writes through; the
+;      second one (15) posted, the first having proved the page writable
 ;   6  a misaligned store miss to a copyback page still writes through
 ;   7  a store miss followed at once by a load of its line's neighbour
 ;   8  four store misses into one line (the stack-push pattern)
@@ -149,9 +150,21 @@ start:	move.l	#CACR_ON,d0
 	chkpk	$3030,$33333305,33
 	chkpk	$2430,$33333302,43
 
-; 5: a store miss to a write-through page writes through
+; 5: a store miss to a write-through page writes through.  The first store
+;    to page 9 may be synchronous (SB_MMU posts only into a page a store has
+;    proved writable); the second is posted like a copyback store and still
+;    writes through (15).  (A posted write-through store goes out on the
+;    master port in its first C_PASS clock, so even a core that allocated
+;    it as well would show the right memory here: the white-box checker's
+;    "store already issued" rule is what catches that.)
 	move.l	#$99999999,$9010
 	chkpk	$9010,$99999999,5
+	move.l	#$98989898,$9020
+	chkpk	$9020,$98989898,15
+	cmp.l	#$98989898,$9020
+	beq.s	.c5
+	failt	25
+.c5:
 
 ; 6: a misaligned store miss to a copyback page writes through (two pieces)
 	move.l	#$56789ABC,$2052
@@ -376,5 +389,7 @@ cmtab:	dc.b	CM_WT,CM_WT,CM_CB,CM_CB,CM_CI,CM_WT,CM_WT,CM_WT
 	dc.l	$A5A5A5A5
 	org	$9010
 	dc.l	$91919191
+	org	$9020
+	dc.l	$92929292
 	org	$A000
 	dc.l	$AAAA0001
