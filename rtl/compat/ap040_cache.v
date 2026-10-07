@@ -70,8 +70,16 @@ module ap040_cache
 	// instruction fetches and everything cache-inhibited keep bypassing
 	// exactly as before.  0: misaligned accesses bypass / clear rows.
 	parameter MIS = 0,
-	// (WALLOC) write-allocate on a copyback store miss (findings/copyback/
-	// plan.md S3).  Plumbing only so far: no behaviour depends on it yet.
+	// (WALLOC) write-allocate on a copyback store miss (M68040UM 4.4.2, V3/I3):
+	// a posted store to a copyback page (r_cb) that misses the data cache
+	// fills its line (the dirty victim pushed first, as for a read miss) and
+	// merges into it in the clock the line is validated (C_TAGW), leaving the
+	// line dirty; the store never reaches memory.  If the line is not
+	// validated (a snoop reached its row during the fill or in that clock,
+	// ad7008f's rule) the store drains to memory as a write-through instead.
+	// Only one-piece stores (not MIS two-piece); a fill error is the late
+	// error the core cannot restart (post_err), as a drain's is.  Needs
+	// COPYBACK = 1.  0: a copyback store miss writes through, as before.
 	parameter WALLOC = 0
 )
 (
@@ -352,6 +360,7 @@ localparam C_PUSH  = 4'd10;  // (COPYBACK) write dirty ways of a data-bank set b
 localparam C_WLOOK = 4'd11;  // (COPYBACK) the walker's set: is its line dirty here?
 localparam C_MLNCH = 4'd12;  // (MIS) a misaligned read's second longword: its row and word are read
 localparam C_MST2  = 4'd13;  // (MIS) a misaligned store's second longword: merge decided
+localparam C_WAL   = 4'd14;  // (WALLOC) write-allocate launch: the store's row is read at p_set
 
 // (COPYBACK) Dirty bits, one per data-bank line.  A row clear spares the
 // dirty ways (vb_keep): a dirty line is only ever dropped after it has been
@@ -637,7 +646,12 @@ reg  [2:0] r_fc;
 wire       st_post_ok = (POST_STORES != 0) && c_write && !c_nocache &&
                         !c_instr;
 wire       sweep_push;   // (COPYBACK) declared here, assigned with need_push below
-assign post_busy = st_posted | dr_active | (cst == C_PUSH) | sweep_push;
+// (WALLOC) a write-allocate in progress: from the store's miss verdict
+// (C_PASS, st_chk) through C_WAL, C_LOOK, the fill and C_TAGW.  The core
+// was acknowledged at acceptance; the allocate holds the walker off
+// (post_busy) exactly as the drain it replaces would.
+reg        wa_v;
+assign post_busy = st_posted | dr_active | (cst == C_PUSH) | sweep_push | ((WALLOC != 0) && wa_v);
 
 // Snoop-vs-fill and snoop-vs-lookup collisions (5.2).  A snoop hitting
 // the row of an in-flight fill poisons it: the fill's data may predate
@@ -668,7 +682,7 @@ always @(posedge clk) begin
 		st_snooped2 <= 0;
 	end
 	else begin
-		if (ce && cst == C_LOOK && !look_hit) fill_snooped <= 0;
+		if (ce && cst == C_LOOK && (!look_hit || ((WALLOC != 0) && wa_v))) fill_snooped <= 0;
 		if ((cst == C_FILL || cst == C_TAGW ||
 		     cst == C_FILLC || cst == C_FILLW) && snoop_fill_row)
 			fill_snooped <= 1;
@@ -819,7 +833,9 @@ assign wr_accept_upd = (cst == C_IDLE) && !(cinv_req && !cinv_done) &&
 // re-reads it)
 wire        mis_launch2 = (MIS != 0) && ((cst == C_MLNCH) ||
                           ((cst == C_PASS) && st_chk && mis_v && mis_two_r));
-assign tag_ridx  = ((cst == C_PUSH) || (cst == C_WLOOK)) ? {1'b0, p_set} :
+// (WALLOC) the allocate reads the store's row at p_set: the core dropped
+// the posted store's request, so a_row names whatever it presents now
+assign tag_ridx  = ((cst == C_PUSH) || (cst == C_WLOOK) || ((WALLOC != 0) && wa_v)) ? {1'b0, p_set} :
                    (mis_launch2 || ((MIS != 0) && mis_v && mis_ph)) ? mis_row2 : a_row;
 wire [87:0] tags_next = (r_way == 2'd0) ? {tag_q[87:22], r_tag} :
                         (r_way == 2'd1) ? {tag_q[87:44], r_tag, tag_q[21:0]} :
@@ -910,6 +926,14 @@ wire st_merge = (cst == C_PASS) && st_chk && look_hit &&
 // writes it: a copyback dirty bit on an invalid line).  st_mrg: either.
 wire st_merge2 = mis_m2 && look_hit && ((!st_snooped2 && !snoop_st_row2) || hit_dirty) && !m_err;
 wire st_mrg    = st_merge | st_merge2;
+// (WALLOC) the store's miss verdict, in the clock st_merge is decided: a
+// posted copyback one-piece store that missed, with no snoop in its window
+// (a snooped window takes the row-invalidate fallback as before)
+wire wa_go     = (WALLOC != 0) && (cst == C_PASS) && st_chk && st_posted && r_cb &&
+                 !mis_v && !look_hit && !st_snooped && !snoop_st_row_pass && !m_err;
+// (WALLOC) the allocate's line is validated in this C_TAGW clock: the same
+// condition as tag_we's, so the merge and the valid bit land together
+wire wa_ok     = (WALLOC != 0) && (cst == C_TAGW) && wa_v && !fill_snooped && !snoop_fill_row;
 
 // the data-array read runs with the acceptance of a cacheable read AND of
 // an update-path store (a store carries c_instr = 0, so its row is the
@@ -938,17 +962,20 @@ always @(posedge clk) begin
 			db[p_set] <= db[p_set] & ~p_mask;
 		else if ((cst == C_PUSH) && push_out && m_ack && (p_wb == 2'd3))
 			db[p_set][p_way] <= 1'b0;
-		if ((cst == C_TAGW) && !r_row[6]) db[r_row[5:0]][r_way] <= 1'b0;
+		if ((cst == C_TAGW) && !r_row[6]) db[r_row[5:0]][r_way] <= wa_ok;
 	end
 end
 assign cd_we     = ((cst == C_FILL) && r_issued && m_ack) ? (4'd1 << r_way) :
                    (cst == C_FILLW)                        ? (4'd1 << r_way) :
                    st_mrg                                  ? (4'd1 << hit_way) :
+                   wa_ok                                   ? (4'd1 << r_way) :
                                                              4'd0;
-assign cd_widx   = st_mrg ? {1'b0, r_row[5:0], ((MIS != 0) ? r_word[1:0] : r_addr[3:2])}
+assign cd_widx   = st_mrg ? {1'b0, r_row[5:0], ((MIS != 0) ? r_word[1:0] : r_addr[3:2])} :
+                   wa_ok  ? {1'b0, r_row[5:0], r_addr[3:2]}
                           : {r_bank, r_row[5:0], r_beat};
 assign cd_wdat   = st_mrg           ? (((MIS != 0) && mis_v) ? merge_be(data_hit, r_wd, r_be)
                                                              : lw_merge(data_hit, r_wdata, r_size, r_off)) :
+                   wa_ok            ? lw_merge(fill_hold, r_wdata, r_size, r_off) :
                    (cst == C_FILLW) ? fill_beat :
                                       m_rdata;
 
@@ -973,7 +1000,7 @@ always @(posedge clk) begin
 		r_cb <= 0;
 		p_set <= 0; p_mask <= 0; p_way <= 0; p_ph <= 0; p_rb <= 0; p_wb <= 0;
 		p_req <= 0; p_tag <= 0; p_ret <= P_IDLE;
-		wk_chk <= 0; wl_ph <= 0;
+		wk_chk <= 0; wl_ph <= 0; wa_v <= 0;
 		pbuf0 <= 0; pbuf1 <= 0; pbuf2 <= 0; pbuf3 <= 0;
 		post_err <= 0;
 		r_wdata <= 0;
@@ -1251,6 +1278,19 @@ always @(posedge clk) begin
 					mis_v     <= 0;   // (MIS) a one-piece store: done
 					cst <= C_IDLE;
 				end
+				else if (wa_go) begin
+					// (WALLOC) the copyback store missed: allocate its line.
+					// p_set names the row for the tag reads from here on;
+					// C_LOOK takes its miss branch (the victim, the fill).
+					st_posted <= 0;
+					st_flow   <= 0;
+					r_cb      <= 0;
+					mis_v     <= 0;
+					r_bank    <= 1'b0;
+					p_set     <= r_row[5:0];
+					wa_v      <= 1'b1;
+					cst <= C_WAL;
+				end
 				else if (st_posted) begin
 					r_cb <= 0;
 					// A1-3a: the posted store is handed to the drain in
@@ -1326,6 +1366,12 @@ always @(posedge clk) begin
 					winv_pend <= 0;
 					cst <= C_IDLE;
 				end
+			end
+
+			C_WAL: begin
+				// (WALLOC) the store's row is being read at p_set (tag_ridx);
+				// the next clock's rq is the victim, its tags the row's
+				cst <= C_LOOK;
 			end
 
 			C_MLNCH: begin
@@ -1455,7 +1501,8 @@ always @(posedge clk) begin
 			end
 
 			C_LOOK: begin
-				if (look_hit && ((!look_snooped && !snoop_look_row) || look_dirty)) begin
+				if (look_hit && ((!look_snooped && !snoop_look_row) || look_dirty) &&
+				    !((WALLOC != 0) && wa_v)) begin
 					// all four ways were read alongside the tags, so the
 					// hit completes here: two cycles request-to-ack
 					if ((MIS != 0) && mis_v && mis_two_r && !mis_ph) begin
@@ -1523,7 +1570,11 @@ always @(posedge clk) begin
 				// invalidate is idempotent).
 				if (fill_err) begin
 					fill_req <= 0;
-					err_hold <= 1;
+					// (WALLOC) the allocate's fill: the core holds no request
+					// of its own to release; the posted store is lost, the
+					// late error the core cannot restart
+					if ((WALLOC != 0) && wa_v) begin post_err <= 1'b1; wa_v <= 1'b0; end
+					else err_hold <= 1;
 					cst <= C_FERR;
 				end
 				else if (fill_ack) begin
@@ -1555,7 +1606,8 @@ always @(posedge clk) begin
 					// the still-asserted request from being
 					// re-accepted before the core withdraws it.
 					r_issued <= 0;
-					err_hold <= 1;
+					if ((WALLOC != 0) && wa_v) begin post_err <= 1'b1; wa_v <= 1'b0; end   // (WALLOC) as C_FILLC
+					else err_hold <= 1;
 					cst <= C_FERR;
 				end
 				else if (!r_issued) r_issued <= 1;
@@ -1581,6 +1633,20 @@ always @(posedge clk) begin
 					r_addr  <= mis_addr2;
 					r_word  <= {2'd0, mis_word2};
 					cst <= C_MLNCH;
+				end
+				else if ((WALLOC != 0) && wa_v) begin
+					// (WALLOC) the merge (cd_we, wa_ok) and the dirty bit land
+					// in this clock with the valid bit, or none of them does:
+					// then the store drains to memory as a write-through
+					wa_v <= 1'b0;
+					if (!wa_ok) begin
+						dr_active <= 1;
+						dr_addr   <= r_addr;
+						dr_wdata  <= r_wdata;
+						dr_size   <= r_size;
+						dr_fc     <= r_fc;
+					end
+					cst <= C_IDLE;
 				end
 				else begin
 					rdata_r <= ((MIS != 0) && mis_v) ? lw_extract2(mis_lw0, fill_hold, r_size, r_off, mis_two_r)
