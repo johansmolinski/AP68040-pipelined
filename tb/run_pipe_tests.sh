@@ -313,6 +313,14 @@ if [ -n "$AP040_REF" ] && [ -f "$AP040_REF/tb/asm/t_integer.s" ] && command -v v
 	timeout 1800 vvp "$WORK/tb_issued_wrap.vvp" +prog="$WORK/t_integer.hex" +timeout=2000000 > "$WORK/compat_issued_wrap.log" 2>&1 &&
 	grep -q "ALL TESTS PASSED" "$WORK/compat_issued_wrap.log" && grep -q "issued_wrap: IF's word count preset" "$WORK/compat_issued_wrap.log" &&
 		echo "  pass  compat:issued_wrap" || { echo "  FAIL  compat:issued_wrap  (see $WORK/compat_issued_wrap.log)"; fail=1; }
+	# (WALLOC) t_cbwa_pipe once more with every line fill on the master port
+	# (FILLCH=0, the board's FILL_CHANNEL = 0): the allocate's fill runs
+	# while the core already presents its next request
+	iverilog -g2012 $SBDEF -Ptb_ap040_pipe_compat.FILLCH=0 -I "$RTL" -I "$RTL/compat" -o "$WORK/tb_compat_fill0.vvp" \
+		tb_ap040_pipe_compat.v tb_sb_check.v ${PIPE_DFP_MIS:+tb_dfpmis_check.v} $CSRC > "$WORK/tb_compat_fill0.clog" 2>&1 &&
+	timeout 1800 vvp "$WORK/tb_compat_fill0.vvp" +prog="$WORK/t_cbwa_pipe.hex" > "$WORK/compat_fill0_t_cbwa_pipe.log" 2>&1 &&
+	grep -q "ALL TESTS PASSED" "$WORK/compat_fill0_t_cbwa_pipe.log" &&
+		echo "  pass  compat-fill0:t_cbwa_pipe" || { echo "  FAIL  compat-fill0:t_cbwa_pipe  (see $WORK/compat_fill0_t_cbwa_pipe.log)"; fail=1; }
 else
 	echo "  (lib/AP68040 not found: compat bench skipped)"
 fi
