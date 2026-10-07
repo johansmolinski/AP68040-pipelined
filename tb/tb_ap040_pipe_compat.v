@@ -67,7 +67,16 @@ reg  [15:0] fberr_addr = 0;
 wire        fberr = fberr_armed && nreset && (busstate == 2'b00) &&
                     (addr_out[15:0] == fberr_addr);
 
-wire        berr = berr_d | fberr;
+// $F1A0 arms a one-shot bus error on a DATA READ of the master port at the
+// written address (0 disarms): a line fill's first word, say -- the cache's
+// write-allocate fill error (WALLOC, t_cbwaerr_pipe; FILLCH=0, so the fill
+// runs on the adapter).
+reg         dberr_armed = 0;
+reg  [15:0] dberr_addr = 0;
+wire        dberr = dberr_armed && nreset && (busstate == 2'b10) &&
+                    (addr_out[15:0] == dberr_addr);
+
+wire        berr = berr_d | fberr | dberr;
 
 wire        clkena_in = (busstate == 2'b01) | mem_ready | berr;
 
@@ -568,6 +577,7 @@ always @(posedge clk) begin
 		// must not eat the armed data berr or vice versa.
 		if (berr_d) berr_armed  <= 0;
 		if (fberr)  fberr_armed <= 0;
+		if (dberr)  dberr_armed <= 0;
 		mem_ready <= 0;
 		lvl_hold <= 0;
 	end
@@ -614,6 +624,13 @@ always @(posedge clk) begin
 	    dut.mem_addr[15:0] == 16'hF154) begin
 		fberr_armed <= |dut.mem_wdata[15:0];
 		fberr_addr  <= dut.mem_wdata[15:0];
+	end
+
+	// $F1A0: one-shot data-read bus error (see the dberr wire above)
+	if (!nreset) dberr_armed <= 0;
+	else if (dut.mem_ack && dut.mem_write && dut.mem_addr[15:0] == 16'hF1A0) begin
+		dberr_armed <= |dut.mem_wdata[15:0];
+		dberr_addr  <= dut.mem_wdata[15:0];
 	end
 
 	// $F146 arms a one-shot bus error on the NEXT table-walker descriptor
@@ -1018,9 +1035,30 @@ always @(posedge clk) begin
 	end
 end
 
+// $F1A2 (word write): a late (posted-store) bus error is this phase's
+// expected end (0 disarms).  The core halting with the cache's post_err set
+// and the longword at the written address unchanged since this write (the
+// lost store never reached memory) passes the phase.
+reg         lerr_exp = 0;
+reg  [15:0] lerr_a = 0;
+reg  [31:0] lerr_d = 0;
+always @(posedge clk) begin
+	if (!nreset) lerr_exp <= 0;
+	else if (dut.mem_ack && dut.mem_write && dut.mem_addr[15:0] == 16'hF1A2) begin
+		lerr_exp <= |dut.mem_wdata[15:0];
+		lerr_a   <= dut.mem_wdata[15:0];
+		lerr_d   <= {mem[dut.mem_wdata[15:1]], mem[dut.mem_wdata[15:1] + 15'd1]};
+	end
+end
+
 // unexpected halt detection
 always @(posedge clk) begin
-	if (nreset && (debug_fault || debug_halted) && result == 0) begin
+	if (nreset && lerr_exp && debug_fault && result == 0 && dut.post_err &&
+	    {mem[lerr_a[15:1]], mem[lerr_a[15:1] + 15'd1]} == lerr_d) begin
+		$display("late bus error: the core halted on the cache's post_err, $%04x still %08x (expected end)", lerr_a, lerr_d);
+		result = 1;
+	end
+	else if (nreset && (debug_fault || debug_halted) && result == 0) begin
 		errors = errors + 1;
 		$display("FAIL: core halted, fault=%b pc=%h ir=%h prev_state=%0d in_exc=%b mem_flt=%b",
 		         debug_fault, dbg_pc, dbg_ir, prev_core_state, shim_in_exc,
