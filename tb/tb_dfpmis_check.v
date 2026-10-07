@@ -35,6 +35,8 @@ integer n_two = 0;          // first lookups of a two-longword read (the cache l
 integer n_two_ok = 0;       // ... the wrapper qualified them with the first half hitting (dfp_two)
 integer n_hold = 0;         // ... the core held the slot (store order allowed)
 integer n_miss2 = 0;        // ... held, then the second clock missed
+// (cache WALLOC) allocates started, merged at validation, filled on the master port
+integer n_wa = 0, n_wa_ok = 0, n_wa_fill0 = 0;
 integer i;
 initial for (i = 0; i < 64; i = i + 1) last_w[i] = -1;
 
@@ -121,6 +123,35 @@ always @(posedge `TB.clk) begin
 		n_viol = n_viol + 1; `TB.errors = `TB.errors + 1;
 		$display("FAIL: dfpmis-check: the second piece merges into the wrong word (t=%0d)", t);
 	end
+	// (cache WALLOC) wa_v is 0 whenever the FSM is idle.  A data-bank line
+	// fill on the master port (C_FILL, the board's path: FILL_CHANNEL = 0)
+	// is a data read (m_instr 0), and the allocate's fill carries the
+	// store's FC.  The allocate's fill runs while the core presents its
+	// NEXT request -- often an instruction fetch -- so c_instr/c_fc are
+	// not the fill's.
+	if (ce && `CC.cst == 4'd0 && `CC.wa_v) begin
+		n_viol = n_viol + 1; `TB.errors = `TB.errors + 1;
+		$display("FAIL: dfpmis-check: wa_v set in C_IDLE (t=%0d)", t);
+	end
+	if (ce && `CC.cst == 4'd4 && !`CC.r_bank && `CC.m_instr) begin
+		n_viol = n_viol + 1; `TB.errors = `TB.errors + 1;
+		$display("FAIL: dfpmis-check: a data-bank line fill goes out as an instruction read (t=%0d)", t);
+	end
+	if (ce && `CC.cst == 4'd4 && `CC.wa_v && `CC.m_fc != `CC.r_fc) begin
+		n_viol = n_viol + 1; `TB.errors = `TB.errors + 1;
+		$display("FAIL: dfpmis-check: the allocate's fill goes out with FC %0d, the store's is %0d (t=%0d)", `CC.m_fc, `CC.r_fc, t);
+	end
+	// only a copyback store (r_cb) is held off the master port in its st_chk
+	// clock; any other posted store is already on its way to memory there,
+	// and allocating it as well would leave a dirty copy of a write-through
+	// line behind
+	if (ce && `CC.wa_go && `CC.m_req) begin
+		n_viol = n_viol + 1; `TB.errors = `TB.errors + 1;
+		$display("FAIL: dfpmis-check: a store already issued on the master port is allocated (t=%0d)", t);
+	end
+	if (ce && `CC.wa_go) n_wa = n_wa + 1;
+	if (ce && `CC.wa_ok) n_wa_ok = n_wa_ok + 1;
+	if (ce && `CC.wa_v && `CC.cst == 4'd4 && `CC.r_issued && `CC.m_ack && `CC.r_beat == 2'd3) n_wa_fill0 = n_wa_fill0 + 1;
 	if (ce && `GD.g_two && `TB.dut.dfp_req) begin
 		n_viol = n_viol + 1;
 		`TB.errors = `TB.errors + 1;
@@ -133,5 +164,9 @@ always @(posedge `TB.clk)
 	if (`TB.dut.mem_ack && `TB.dut.mem_write && `TB.dut.mem_addr[15:0] == 16'hF102)
 		$display("DFPMIS-CHECK: %0d two-longword reads served by the data read path, %0d violations (%0d two-longword lookups: %0d first half hit, %0d held, %0d missed in the second clock)",
 		         n_served, n_viol, n_two, n_two_ok, n_hold, n_miss2);
+always @(posedge `TB.clk)
+	if (`TB.dut.mem_ack && `TB.dut.mem_write && `TB.dut.mem_addr[15:0] == 16'hF102 && n_wa != 0)
+		$display("WALLOC-CHECK: %0d store misses allocated, %0d merged at validation (%0d drained), %0d filled on the master port",
+		         n_wa, n_wa_ok, n_wa - n_wa_ok, n_wa_fill0);
 
 endmodule

@@ -20,7 +20,9 @@
 ;   7  a DMA write to another line of a dirty line's set keeps the line
 ;   8  code stored through copyback runs after CPUSHA
 ;   9  a write-through page writes through
-;  10  a store miss writes through (no write-allocate)
+;  10  a store miss writes through (no write-allocate); with WALLOC ($F19A
+;      = 1) it allocates instead: memory unchanged until CPUSHA, then new
+;      (t_cbwa_pipe tests the allocate itself)
 ;  11  all four ways of one set dirty ($2080/$2480/$2880/$2C80), CPUSHA
 ;      writes every one back
 ;  12  three ways of one set dirty ($2090/$2490/$2890), then a
@@ -34,6 +36,7 @@ DONEREG	equ	$F102
 PEEKA	equ	$F190
 PEEKD	equ	$F192
 CBMODE	equ	$F196
+WAMODE	equ	$F19A
 ROOT	equ	$5000
 PTR	equ	$5200
 PAGE	equ	$5400
@@ -196,9 +199,14 @@ start:	move.l	#CACR_ON,d0
 	move.l	#$99999999,$9000
 	chkpk	$9000,$99999999,9
 
-; 10: a store miss writes through
+; 10: a store miss writes through -- or, with write-allocate, stays in the
+; cache (dirty) until it is pushed
 	move.l	#$ABABABAB,$2070		; never read: not resident
-	chkpk	$2070,$ABABABAB,10
+	tst.w	WAMODE
+	beq.s	.c10wt
+	chkpk	$2070,$A8A8A8A8,110		; allocated: memory still old
+	cpusha	dc
+.c10wt:	chkpk	$2070,$ABABABAB,10
 
 ; 11: four dirty ways in one set
 	move.l	$2080,d0

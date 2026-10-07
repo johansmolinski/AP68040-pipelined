@@ -21,11 +21,12 @@ SRC="$RTL/ap040_pipe_pkg.sv $(ls $RTL/ap040_*.v | tr '\n' ' ')"
 # PIPE_STORE_BUF=<n>: build the program and wrapper benches with that store
 # buffer mode (findings/storebuf/plan.md: 0 off, 1 posting, 2 the A/B
 # reference); the bus-mode benches check the store order with tb_sb_check.v
-SBDEF="${PIPE_STORE_BUF:+-DSTORE_BUF=$PIPE_STORE_BUF} ${PIPE_FWD:+-DFWD=$PIPE_FWD} ${PIPE_RAS:+-DRAS=$PIPE_RAS} ${PIPE_PRECISE:+-DPRECISE=$PIPE_PRECISE} ${PIPE_MISPLIT:+-DMISPLIT=$PIPE_MISPLIT} ${PIPE_SB_MMU:+-DSB_MMU=$PIPE_SB_MMU} ${PIPE_COPYBACK:+-DCOPYBACK=$PIPE_COPYBACK} ${PIPE_BTB:+-DBTB=$PIPE_BTB} ${PIPE_LDX:+-DLDX=$PIPE_LDX} ${PIPE_BTFN:+-DBTFN=$PIPE_BTFN} ${PIPE_DFP_MIS:+-DDFP_MIS=$PIPE_DFP_MIS}"
+SBDEF="${PIPE_STORE_BUF:+-DSTORE_BUF=$PIPE_STORE_BUF} ${PIPE_FWD:+-DFWD=$PIPE_FWD} ${PIPE_RAS:+-DRAS=$PIPE_RAS} ${PIPE_PRECISE:+-DPRECISE=$PIPE_PRECISE} ${PIPE_MISPLIT:+-DMISPLIT=$PIPE_MISPLIT} ${PIPE_SB_MMU:+-DSB_MMU=$PIPE_SB_MMU} ${PIPE_COPYBACK:+-DCOPYBACK=$PIPE_COPYBACK} ${PIPE_BTB:+-DBTB=$PIPE_BTB} ${PIPE_LDX:+-DLDX=$PIPE_LDX} ${PIPE_BTFN:+-DBTFN=$PIPE_BTFN} ${PIPE_DFP_MIS:+-DDFP_MIS=$PIPE_DFP_MIS} ${PIPE_WALLOC:+-DWALLOC=$PIPE_WALLOC}"
 # PIPE_SB_MMU=1: stores posted with translation on too (store buffer stage 4)
 # PIPE_LDX=1: late-operand load dispatch (findings/loadstore/plan.md step 1)
 # PIPE_BTFN=1: forward conditional branches guessed not taken (plan section 11)
 # PIPE_DFP_MIS=1: misaligned reads served by the data read path (findings/loadstore/plan.md step 3)
+# PIPE_WALLOC=1: write-allocate on a copyback store miss (findings/copyback/plan.md S3; needs PIPE_COPYBACK=1)
 # PIPE_PRECISE=1 / PIPE_MISPLIT=1: address-precise fast reads, misaligned transfers split (catchup)
 # PIPE_RAS=1: ID's return-address stack (findings/catchup/plan.md step 2), every bench
 # PIPE_FWD=1: the wrapper benches with store-to-load forwarding (findings/catchup/plan.md)
@@ -273,12 +274,12 @@ if [ -n "$AP040_REF" ] && [ -f "$AP040_REF/tb/asm/t_integer.s" ] && command -v v
 	# landing on an instruction past P_START with no read in flight.  The
 	# failure is a WEDGE, so it gets a short phase timeout (it passes in
 	# 180k clocks) instead of the bench's 20M default.
-	for t in t_integer t_cache t_bitfield_mmu t_mmu_m9s t_mmu_pipe t_rmw_wp texc_m9t t_irq_pipe t_mbit_pipe t_trirq_pipe t_ipend_pipe t_irqwedge_pipe t_irqlat_pipe t_icache_pipe t_earlydrop_pipe t_specread_pipe t_dcache_pipe t_sbuf_pipe t_fwd_pipe t_sbmmu_pipe t_cb_pipe t_cbtab_pipe t_cbsnp_pipe t_specexc_pipe t_dfpmis_pipe $TMR; do
+	for t in t_integer t_cache t_bitfield_mmu t_mmu_m9s t_mmu_pipe t_rmw_wp texc_m9t t_irq_pipe t_mbit_pipe t_trirq_pipe t_ipend_pipe t_irqwedge_pipe t_irqlat_pipe t_icache_pipe t_earlydrop_pipe t_specread_pipe t_dcache_pipe t_sbuf_pipe t_fwd_pipe t_sbmmu_pipe t_cb_pipe t_cbtab_pipe t_cbsnp_pipe t_specexc_pipe t_dfpmis_pipe t_cbwa_pipe $TMR; do
 		if [ "$t" = t_mmu_m9s ] || [ "$t" = t_movem_restart_m9s ] || [ "$t" = texc_m9t ]; then
 			vasmm68k_mot -Fbin -m68040 -no-opt -quiet -o "$WORK/$t.bin" "$WORK/$t.s"
 		elif [ "$t" = t_mmu_pipe ] || [ "$t" = t_rmw_wp ]; then
 			vasmm68k_mot -Fbin -m68040 -no-opt -quiet -o "$WORK/$t.bin" "mmu_asm/$t.s"
-		elif [ "$t" = t_icache_pipe ] || [ "$t" = t_earlydrop_pipe ] || [ "$t" = t_specread_pipe ] || [ "$t" = t_dcache_pipe ] || [ "$t" = t_sbuf_pipe ] || [ "$t" = t_fwd_pipe ] || [ "$t" = t_sbmmu_pipe ] || [ "$t" = t_cb_pipe ] || [ "$t" = t_cbtab_pipe ] || [ "$t" = t_cbsnp_pipe ] || [ "$t" = t_specexc_pipe ] || [ "$t" = t_dfpmis_pipe ]; then
+		elif [ "$t" = t_icache_pipe ] || [ "$t" = t_earlydrop_pipe ] || [ "$t" = t_specread_pipe ] || [ "$t" = t_dcache_pipe ] || [ "$t" = t_sbuf_pipe ] || [ "$t" = t_fwd_pipe ] || [ "$t" = t_sbmmu_pipe ] || [ "$t" = t_cb_pipe ] || [ "$t" = t_cbtab_pipe ] || [ "$t" = t_cbsnp_pipe ] || [ "$t" = t_specexc_pipe ] || [ "$t" = t_dfpmis_pipe ] || [ "$t" = t_cbwa_pipe ]; then
 			# plan M14: the pipelined instruction read path's coherency rules
 			vasmm68k_mot -Fbin -m68040 -no-opt -quiet -o "$WORK/$t.bin" "cache_asm/$t.s"
 		elif [ "$t" = t_irq_pipe ] || [ "$t" = t_mbit_pipe ] || [ "$t" = t_trirq_pipe ] || [ "$t" = t_ipend_pipe ] || [ "$t" = t_irqwedge_pipe ] || [ "$t" = t_irqlat_pipe ]; then
@@ -312,6 +313,25 @@ if [ -n "$AP040_REF" ] && [ -f "$AP040_REF/tb/asm/t_integer.s" ] && command -v v
 	timeout 1800 vvp "$WORK/tb_issued_wrap.vvp" +prog="$WORK/t_integer.hex" +timeout=2000000 > "$WORK/compat_issued_wrap.log" 2>&1 &&
 	grep -q "ALL TESTS PASSED" "$WORK/compat_issued_wrap.log" && grep -q "issued_wrap: IF's word count preset" "$WORK/compat_issued_wrap.log" &&
 		echo "  pass  compat:issued_wrap" || { echo "  FAIL  compat:issued_wrap  (see $WORK/compat_issued_wrap.log)"; fail=1; }
+	# (WALLOC) every line fill on the master port (FILLCH=0, the board's
+	# FILL_CHANNEL = 0): t_cbwa_pipe once more -- the allocate's fill runs
+	# while the core already presents its next request -- and
+	# t_cbwaerr_pipe, the allocate's fill taking a bus error (the bench's
+	# channel cannot fail a fill)
+	iverilog -g2012 $SBDEF -Ptb_ap040_pipe_compat.FILLCH=0 -I "$RTL" -I "$RTL/compat" -o "$WORK/tb_compat_fill0.vvp" \
+		tb_ap040_pipe_compat.v tb_sb_check.v ${PIPE_DFP_MIS:+tb_dfpmis_check.v} $CSRC > "$WORK/tb_compat_fill0.clog" 2>&1 || {
+		echo "  COMPILE-ERROR compat fill0 bench"; grep -v "constant selects" "$WORK/tb_compat_fill0.clog" | head -5; exit 1; }
+	vasmm68k_mot -Fbin -m68040 -no-opt -quiet -o "$WORK/t_cbwaerr_pipe.bin" cache_asm/t_cbwaerr_pipe.s &&
+	python3 bin2hex.py "$WORK/t_cbwaerr_pipe.bin" "$WORK/t_cbwaerr_pipe.hex"
+	for t in t_cbwa_pipe t_cbwaerr_pipe; do
+		if timeout 1800 vvp "$WORK/tb_compat_fill0.vvp" +prog="$WORK/$t.hex" > "$WORK/compat_fill0_$t.log" 2>&1 &&
+		   grep -q "ALL TESTS PASSED" "$WORK/compat_fill0_$t.log"; then
+			echo "  pass  compat-fill0:$t"
+		else
+			echo "  FAIL  compat-fill0:$t  (see $WORK/compat_fill0_$t.log)"
+			fail=1
+		fi
+	done
 else
 	echo "  (lib/AP68040 not found: compat bench skipped)"
 fi
