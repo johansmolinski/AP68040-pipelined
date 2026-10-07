@@ -21,11 +21,12 @@ SRC="$RTL/ap040_pipe_pkg.sv $(ls $RTL/ap040_*.v | tr '\n' ' ')"
 # PIPE_STORE_BUF=<n>: build the program and wrapper benches with that store
 # buffer mode (findings/storebuf/plan.md: 0 off, 1 posting, 2 the A/B
 # reference); the bus-mode benches check the store order with tb_sb_check.v
-SBDEF="${PIPE_STORE_BUF:+-DSTORE_BUF=$PIPE_STORE_BUF} ${PIPE_FWD:+-DFWD=$PIPE_FWD} ${PIPE_RAS:+-DRAS=$PIPE_RAS} ${PIPE_PRECISE:+-DPRECISE=$PIPE_PRECISE} ${PIPE_MISPLIT:+-DMISPLIT=$PIPE_MISPLIT} ${PIPE_SB_MMU:+-DSB_MMU=$PIPE_SB_MMU} ${PIPE_COPYBACK:+-DCOPYBACK=$PIPE_COPYBACK} ${PIPE_BTB:+-DBTB=$PIPE_BTB} ${PIPE_LDX:+-DLDX=$PIPE_LDX} ${PIPE_BTFN:+-DBTFN=$PIPE_BTFN} ${PIPE_DFP_MIS:+-DDFP_MIS=$PIPE_DFP_MIS}"
+SBDEF="${PIPE_STORE_BUF:+-DSTORE_BUF=$PIPE_STORE_BUF} ${PIPE_FWD:+-DFWD=$PIPE_FWD} ${PIPE_RAS:+-DRAS=$PIPE_RAS} ${PIPE_PRECISE:+-DPRECISE=$PIPE_PRECISE} ${PIPE_MISPLIT:+-DMISPLIT=$PIPE_MISPLIT} ${PIPE_SB_MMU:+-DSB_MMU=$PIPE_SB_MMU} ${PIPE_COPYBACK:+-DCOPYBACK=$PIPE_COPYBACK} ${PIPE_BTB:+-DBTB=$PIPE_BTB} ${PIPE_LDX:+-DLDX=$PIPE_LDX} ${PIPE_BTFN:+-DBTFN=$PIPE_BTFN} ${PIPE_DFP_MIS:+-DDFP_MIS=$PIPE_DFP_MIS} ${PIPE_WALLOC:+-DWALLOC=$PIPE_WALLOC}"
 # PIPE_SB_MMU=1: stores posted with translation on too (store buffer stage 4)
 # PIPE_LDX=1: late-operand load dispatch (findings/loadstore/plan.md step 1)
 # PIPE_BTFN=1: forward conditional branches guessed not taken (plan section 11)
 # PIPE_DFP_MIS=1: misaligned reads served by the data read path (findings/loadstore/plan.md step 3)
+# PIPE_WALLOC=1: write-allocate on a copyback store miss (findings/copyback/plan.md S3; needs PIPE_COPYBACK=1)
 # PIPE_PRECISE=1 / PIPE_MISPLIT=1: address-precise fast reads, misaligned transfers split (catchup)
 # PIPE_RAS=1: ID's return-address stack (findings/catchup/plan.md step 2), every bench
 # PIPE_FWD=1: the wrapper benches with store-to-load forwarding (findings/catchup/plan.md)

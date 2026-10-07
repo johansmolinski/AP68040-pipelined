@@ -80,7 +80,12 @@ module ap040_pipe_tg68k_compat
 	// inside one 4K page is served by the data read path as two consecutive
 	// longword lookups of the cache copy (one clock more than an aligned
 	// read).  0: misaligned reads bypass the cache on the port, as before.
-	parameter AP040_DFP_MIS      = 0
+	parameter AP040_DFP_MIS      = 0,
+	// (findings/copyback/plan.md S3) write-allocate on a copyback store miss
+	// (M68040UM 4.4.2): a store that misses a copyback page fills its line
+	// and stays in the cache, dirty.  Needs AP040_COPYBACK = 1.  0: a
+	// copyback store miss writes through, as before.
+	parameter AP040_WALLOC       = 0
 )
 (
 	input         clk,
@@ -773,7 +778,8 @@ if (AP040_ENABLE_CACHE != 0) begin : g_cache
 		.DFP_MIS(AP040_DFP_MIS),
 		// one switch: the cache's misaligned slow path (MIS) is what keeps
 		// the lines the fast path (DFP_MIS) serves resident; neither pays alone
-		.MIS(AP040_DFP_MIS)
+		.MIS(AP040_DFP_MIS),
+		.WALLOC(AP040_WALLOC)
 	) cache (
 		.clk(clk),
 		.nreset(nreset),

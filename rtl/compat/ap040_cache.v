@@ -69,7 +69,10 @@ module ap040_cache
 	// does.  Page-crossing accesses (the next longword in the next page),
 	// instruction fetches and everything cache-inhibited keep bypassing
 	// exactly as before.  0: misaligned accesses bypass / clear rows.
-	parameter MIS = 0
+	parameter MIS = 0,
+	// (WALLOC) write-allocate on a copyback store miss (findings/copyback/
+	// plan.md S3).  Plumbing only so far: no behaviour depends on it yet.
+	parameter WALLOC = 0
 )
 (
 	input             clk,

@@ -284,6 +284,15 @@ end
 `ifndef BTFN
 `define BTFN 0
 `endif
+// WALLOC: write-allocate on a copyback store miss (AP040_WALLOC).
+// WALLOC_REG (default WALLOC): what $F19A claims -- a non-allocating core
+// built with WALLOC_REG=1 is how t_cbwa_pipe is shown red
+`ifndef WALLOC
+`define WALLOC 0
+`endif
+`ifndef WALLOC_REG
+`define WALLOC_REG `WALLOC
+`endif
 `ifndef DFP_MIS
 `define DFP_MIS 0
 `endif
@@ -300,7 +309,8 @@ ap040_pipe_tg68k_compat #(.AP040_ENABLE_CACHE(`AP040_TB_CACHE),
                      .AP040_BTB(`BTB),
                      .AP040_LDX(`LDX),
                      .AP040_BTFN(`BTFN),
-                     .AP040_DFP_MIS(`DFP_MIS)) dut
+                     .AP040_DFP_MIS(`DFP_MIS),
+                     .AP040_WALLOC(`WALLOC)) dut
 (
 	.clk(clk),
 	.nreset(nreset),
@@ -783,7 +793,8 @@ end
 // dirty copyback line is not in memory until it is pushed).  Read them
 // through a cache-inhibited mapping, or the data cache keeps an old copy.
 // $F196 (read): 1 when the core under test has the copyback cache compiled
-// in (COPYBACK), set with each phase's program load.
+// in (COPYBACK), set with each phase's program load.  $F198: DFP_MIS.
+// $F19A: 1 when a copyback store miss allocates its line (WALLOC_REG).
 reg [15:0] peek_a = 0;
 always @(posedge clk) begin
 	if (nreset && dut.mem_ack && dut.mem_write && dut.mem_addr[15:0] == 16'hF190)
@@ -1211,6 +1222,7 @@ task run_phase;
 		mem[16'hF160 >> 1] = 16'h0007;	// coarse + fine IPL + berr injection
 		mem[16'hF196 >> 1] = (`COPYBACK != 0) ? 16'h0001 : 16'h0000;	// copyback compiled in
 		mem[16'hF198 >> 1] = (`DFP_MIS != 0) ? 16'h0001 : 16'h0000;	// misaligned reads served by the data read path (t_dfpmis_pipe)
+		mem[16'hF19A >> 1] = (`WALLOC_REG != 0) ? 16'h0001 : 16'h0000;	// write-allocate on a copyback store miss (t_cbwa_pipe)
 
 		nreset = 0;
 		repeat (10) @(posedge clk);
