@@ -764,7 +764,11 @@ assign m_req   = dr_active   ? 1'b1 :
 assign m_write = dr_active   ? 1'b1 :
                  push_out    ? 1'b1 :
                  fill_active ? 1'b0 : (st_posted ? 1'b1 : c_write);
-assign m_instr = (dr_active | st_posted | push_out) ? 1'b0 : c_instr;
+// (WALLOC) the allocate's fill is a data read with the store's FC: the
+// core presents its NEXT request meanwhile (often an instruction fetch),
+// so c_instr/c_fc are not the fill's (FILL_CHANNEL = 0, the board's path)
+wire        wa_m    = (WALLOC != 0) && wa_v;
+assign m_instr = (dr_active | st_posted | push_out | wa_m) ? 1'b0 : c_instr;
 assign m_size  = dr_active   ? dr_size :
                  push_out    ? `AP040_SZ_L :
                  fill_active ? `AP040_SZ_L : (st_posted ? r_size : c_size);
@@ -773,7 +777,7 @@ assign m_addr  = dr_active   ? dr_addr :
                  fill_active ? {r_addr[31:4], r_beat, 2'b00}
                              : (st_posted ? r_addr : c_addr);
 assign m_wdata = dr_active ? dr_wdata : push_out ? pbuf_w : (st_posted ? r_wdata : c_wdata);
-assign m_fc    = dr_active ? dr_fc    : push_out ? 3'd5   : (st_posted ? r_fc    : c_fc);
+assign m_fc    = dr_active ? dr_fc    : push_out ? 3'd5   : ((st_posted | wa_m) ? r_fc : c_fc);
 
 // A posted store was acknowledged from ack_r at acceptance; the memory
 // acknowledge that ends its drain must NOT reach the core, which by then
