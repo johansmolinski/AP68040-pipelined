@@ -77,6 +77,7 @@ all 0 (off) by default:
 | `AP040_LDX` | an eligible load goes to EX in the clock it is looked up | 1 |
 | `AP040_COPYBACK` | the data cache keeps stores to CM = 01 pages (copyback), DDR3 board only | 1 |
 | `AP040_DFP_MIS` | a misaligned access inside a 4K page is served from (or fills, or merges into) the data cache | 1 |
+| `AP040_WALLOC` | a one-piece store that misses a CM = 01 page fills its line and stays in the cache, dirty (write-allocate; needs `AP040_COPYBACK`) | 0 |
 | `AP040_BTB` | IF's branch target buffer | 0 |
 | `AP040_MISPLIT` | splits misaligned transfers into aligned pieces | 0 |
 
