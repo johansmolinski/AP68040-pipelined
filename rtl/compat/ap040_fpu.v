@@ -30,6 +30,12 @@
 `include "ap040_defs.svh"
 
 module ap040_fpu
+#(
+	// 1: the FSAVE/FRESTORE frame registers take their next value through
+	// one encoded selector per field (findings xc7, candidate 4); every
+	// value, every clock, the same as 0, which is the original form
+	parameter XC7 = 0
+)
 (
 	input             clk,
 	input             nreset,

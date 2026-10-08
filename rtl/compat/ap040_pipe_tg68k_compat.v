@@ -85,7 +85,12 @@ module ap040_pipe_tg68k_compat
 	// (M68040UM 4.4.2): a store that misses a copyback page fills its line
 	// and stays in the cache, dirty.  Needs AP040_COPYBACK = 1.  0: a
 	// copyback store miss writes through, as before.
-	parameter AP040_WALLOC       = 0
+	parameter AP040_WALLOC       = 0,
+	// Artix-7 resource mapping (findings xc7): forms that suit the
+	// 7-series LUT fabric -- here the FPU's FSAVE/FRESTORE frame registers
+	// written through one encoded selector per field.  0: the
+	// vendor-neutral forms, exactly as before (the Intel builds).
+	parameter AP040_XC7          = 0
 )
 (
 	input         clk,

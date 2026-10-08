@@ -25,7 +25,7 @@
 // Nothing on the unit is tied off any more.                                //
 //--------------------------------------------------------------------------//
 
-ap040_fpu u_fpu
+ap040_fpu #(.XC7(AP040_XC7)) u_fpu
 (
 	.clk(clk), .nreset(nreset), .ce(fp_ce),
 

@@ -100,6 +100,10 @@ wire        fp_pcap, fp_fr_e1pend;
 wire  [7:0] fp_cur_vec;
 wire        fp_ce = ce;
 `ifdef FPU_REAL
+`ifndef XC7
+`define XC7 0
+`endif
+localparam AP040_XC7 = `XC7;   // the wrapper's switch, for the include
 `include "ap040_fpu_tie.vh"
 assign fp_dbl = 1'b0;
 `elsif FPU_STUB
