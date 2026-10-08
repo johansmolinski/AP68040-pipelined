@@ -305,6 +305,9 @@ end
 `ifndef DFP_MIS
 `define DFP_MIS 0
 `endif
+`ifndef XC7
+`define XC7 0
+`endif
 ap040_pipe_tg68k_compat #(.AP040_ENABLE_CACHE(`AP040_TB_CACHE),
                      .AP040_POST_STORES(POST),
                      .AP040_FILL_CHANNEL(FILLCH),
@@ -319,7 +322,8 @@ ap040_pipe_tg68k_compat #(.AP040_ENABLE_CACHE(`AP040_TB_CACHE),
                      .AP040_LDX(`LDX),
                      .AP040_BTFN(`BTFN),
                      .AP040_DFP_MIS(`DFP_MIS),
-                     .AP040_WALLOC(`WALLOC)) dut
+                     .AP040_WALLOC(`WALLOC),
+                     .AP040_XC7(`XC7)) dut
 (
 	.clk(clk),
 	.nreset(nreset),

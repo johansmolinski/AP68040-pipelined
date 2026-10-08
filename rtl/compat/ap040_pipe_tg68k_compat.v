@@ -85,7 +85,12 @@ module ap040_pipe_tg68k_compat
 	// (M68040UM 4.4.2): a store that misses a copyback page fills its line
 	// and stays in the cache, dirty.  Needs AP040_COPYBACK = 1.  0: a
 	// copyback store miss writes through, as before.
-	parameter AP040_WALLOC       = 0
+	parameter AP040_WALLOC       = 0,
+	// Xilinx 7-series resource mapping: the data cache's valid, round-robin
+	// and dirty tables in distributed RAM (LUTRAM) instead of flip-flops,
+	// same clock counts.  0: the vendor-neutral flip-flop forms, exactly as
+	// before -- what the Intel builds use.
+	parameter AP040_XC7          = 0
 )
 (
 	input         clk,
@@ -779,7 +784,8 @@ if (AP040_ENABLE_CACHE != 0) begin : g_cache
 		// one switch: the cache's misaligned slow path (MIS) is what keeps
 		// the lines the fast path (DFP_MIS) serves resident; neither pays alone
 		.MIS(AP040_DFP_MIS),
-		.WALLOC(AP040_WALLOC)
+		.WALLOC(AP040_WALLOC),
+		.XC7(AP040_XC7)
 	) cache (
 		.clk(clk),
 		.nreset(nreset),

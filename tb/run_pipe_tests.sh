@@ -21,12 +21,13 @@ SRC="$RTL/ap040_pipe_pkg.sv $(ls $RTL/ap040_*.v | tr '\n' ' ')"
 # PIPE_STORE_BUF=<n>: build the program and wrapper benches with that store
 # buffer mode (findings/storebuf/plan.md: 0 off, 1 posting, 2 the A/B
 # reference); the bus-mode benches check the store order with tb_sb_check.v
-SBDEF="${PIPE_STORE_BUF:+-DSTORE_BUF=$PIPE_STORE_BUF} ${PIPE_FWD:+-DFWD=$PIPE_FWD} ${PIPE_RAS:+-DRAS=$PIPE_RAS} ${PIPE_PRECISE:+-DPRECISE=$PIPE_PRECISE} ${PIPE_MISPLIT:+-DMISPLIT=$PIPE_MISPLIT} ${PIPE_SB_MMU:+-DSB_MMU=$PIPE_SB_MMU} ${PIPE_COPYBACK:+-DCOPYBACK=$PIPE_COPYBACK} ${PIPE_BTB:+-DBTB=$PIPE_BTB} ${PIPE_LDX:+-DLDX=$PIPE_LDX} ${PIPE_BTFN:+-DBTFN=$PIPE_BTFN} ${PIPE_DFP_MIS:+-DDFP_MIS=$PIPE_DFP_MIS} ${PIPE_WALLOC:+-DWALLOC=$PIPE_WALLOC}"
+SBDEF="${PIPE_STORE_BUF:+-DSTORE_BUF=$PIPE_STORE_BUF} ${PIPE_FWD:+-DFWD=$PIPE_FWD} ${PIPE_RAS:+-DRAS=$PIPE_RAS} ${PIPE_PRECISE:+-DPRECISE=$PIPE_PRECISE} ${PIPE_MISPLIT:+-DMISPLIT=$PIPE_MISPLIT} ${PIPE_SB_MMU:+-DSB_MMU=$PIPE_SB_MMU} ${PIPE_COPYBACK:+-DCOPYBACK=$PIPE_COPYBACK} ${PIPE_BTB:+-DBTB=$PIPE_BTB} ${PIPE_LDX:+-DLDX=$PIPE_LDX} ${PIPE_BTFN:+-DBTFN=$PIPE_BTFN} ${PIPE_DFP_MIS:+-DDFP_MIS=$PIPE_DFP_MIS} ${PIPE_WALLOC:+-DWALLOC=$PIPE_WALLOC} ${PIPE_XC7:+-DXC7=$PIPE_XC7}"
 # PIPE_SB_MMU=1: stores posted with translation on too (store buffer stage 4)
 # PIPE_LDX=1: late-operand load dispatch (findings/loadstore/plan.md step 1)
 # PIPE_BTFN=1: forward conditional branches guessed not taken (plan section 11)
 # PIPE_DFP_MIS=1: misaligned reads served by the data read path (findings/loadstore/plan.md step 3)
 # PIPE_WALLOC=1: write-allocate on a copyback store miss (findings/copyback/plan.md S3; needs PIPE_COPYBACK=1)
+# PIPE_XC7=1: the wrapper benches with AP040_XC7 (the cache's tables in distributed RAM)
 # PIPE_PRECISE=1 / PIPE_MISPLIT=1: address-precise fast reads, misaligned transfers split (catchup)
 # PIPE_RAS=1: ID's return-address stack (findings/catchup/plan.md step 2), every bench
 # PIPE_FWD=1: the wrapper benches with store-to-load forwarding (findings/catchup/plan.md)
@@ -230,6 +231,17 @@ iverilog -g2012 -o "$WORK/tb_xc7_ram2w.vvp" tb_ap040_xc7_ram2w.v "$RTL/compat/ap
 vvp "$WORK/tb_xc7_ram2w.vvp" > "$WORK/unit_xc7_ram2w.log" 2>&1 && grep -q "ALL TESTS PASSED" "$WORK/unit_xc7_ram2w.log" &&
 	echo "  pass  unit:xc7_ram2w" || { echo "  FAIL  unit:xc7_ram2w  (see $WORK/unit_xc7_ram2w.log)"; fail=1; }
 
+# the cache's snoop and port-B paths (tb_ap040_cache_snoop.v, written for
+# rtl_old/'s cache) on rtl/compat/ap040_cache.v, its tables in flip-flops
+# and (AP040_XC7) in distributed RAM: a snoop and a tag write meeting in
+# one clock is exactly the two-write case
+for x in 0 1; do
+	iverilog -g2012 -DAP040_PIPE_CACHE -DXC7=$x -I "$RTL/compat" -s tb_ap040_cache_snoop -o "$WORK/tb_snoop_x$x.vvp" \
+		tb_ap040_cache_snoop.v "$RTL/compat/ap040_cache.v" "$RTL/compat/ap040_xc7_ram2w.v" "$RTL/compat/primitives/dpram.v" > "$WORK/tb_snoop_x$x.clog" 2>&1 &&
+	vvp "$WORK/tb_snoop_x$x.vvp" > "$WORK/unit_cache_snoop_x$x.log" 2>&1 && grep -q "ALL TESTS PASSED" "$WORK/unit_cache_snoop_x$x.log" &&
+		echo "  pass  unit:cache_snoop_x$x" || { echo "  FAIL  unit:cache_snoop_x$x  (see $WORK/unit_cache_snoop_x$x.log)"; fail=1; }
+done
+
 # the wrapper (plan M5): ap040_pipe_tg68k_compat with the reference's cache,
 # MMU (M7) and 16-bit adapter, lib/AP68040's program bench (three wait
 # profiles) on the reference's t_integer.s, t_bitfield_mmu.s and t_mmu.s.  AP040_REF points at lib/AP68040.
@@ -241,7 +253,8 @@ AP040_REF=${AP040_REF:-$( { cd ../../AP68040 2>/dev/null || cd ../../MinimigAGA_
 if [ -n "$AP040_REF" ] && [ -f "$AP040_REF/tb/asm/t_integer.s" ] && command -v vasmm68k_mot > /dev/null; then
 	CSRC="$SRC $(ls $RTL/compat/*.v | tr '\n' ' ') $RTL/compat/primitives/dpram.v"
 	# (PIPE_DFP_MIS) the misaligned read path's white-box collision checker joins the bench
-	iverilog -g2012 $SBDEF -I "$RTL" -I "$RTL/compat" -o "$WORK/tb_compat.vvp" tb_ap040_pipe_compat.v tb_sb_check.v ${PIPE_DFP_MIS:+tb_dfpmis_check.v} $CSRC > "$WORK/tb_compat.clog" 2>&1 || {
+	# (PIPE_XC7) the cache tables' white-box checker (RAM against the flip-flop form) too
+	iverilog -g2012 $SBDEF -I "$RTL" -I "$RTL/compat" -o "$WORK/tb_compat.vvp" tb_ap040_pipe_compat.v tb_sb_check.v ${PIPE_DFP_MIS:+tb_dfpmis_check.v} ${PIPE_XC7:+tb_xc7_check.v} $CSRC > "$WORK/tb_compat.clog" 2>&1 || {
 		echo "  COMPILE-ERROR compat bench"; grep -v "constant selects" "$WORK/tb_compat.clog" | head -5; exit 1; }
 	# lib/AP68040's reset bench on the wrapper, and its adapter unit benches
 	# on the lifted copies
@@ -328,7 +341,7 @@ if [ -n "$AP040_REF" ] && [ -f "$AP040_REF/tb/asm/t_integer.s" ] && command -v v
 	# m_* field moves under an outstanding access) is red there on a fill
 	# that lets c_wdata through
 	iverilog -g2012 $SBDEF -Ptb_ap040_pipe_compat.FILLCH=0 -I "$RTL" -I "$RTL/compat" -o "$WORK/tb_compat_fill0.vvp" \
-		tb_ap040_pipe_compat.v tb_sb_check.v ${PIPE_DFP_MIS:+tb_dfpmis_check.v} $CSRC > "$WORK/tb_compat_fill0.clog" 2>&1 || {
+		tb_ap040_pipe_compat.v tb_sb_check.v ${PIPE_DFP_MIS:+tb_dfpmis_check.v} ${PIPE_XC7:+tb_xc7_check.v} $CSRC > "$WORK/tb_compat_fill0.clog" 2>&1 || {
 		echo "  COMPILE-ERROR compat fill0 bench"; grep -v "constant selects" "$WORK/tb_compat_fill0.clog" | head -5; exit 1; }
 	vasmm68k_mot -Fbin -m68040 -no-opt -quiet -o "$WORK/t_cbwaerr_pipe.bin" cache_asm/t_cbwaerr_pipe.s &&
 	python3 bin2hex.py "$WORK/t_cbwaerr_pipe.bin" "$WORK/t_cbwaerr_pipe.hex"

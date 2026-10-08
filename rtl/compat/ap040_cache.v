@@ -80,7 +80,12 @@ module ap040_cache
 	// Only one-piece stores (not MIS two-piece); a fill error is the late
 	// error the core cannot restart (post_err), as a drain's is.  Needs
 	// COPYBACK = 1.  0: a copyback store miss writes through, as before.
-	parameter WALLOC = 0
+	parameter WALLOC = 0,
+	// AP040_XC7 (Xilinx 7-series): the valid and round-robin tables (vb,
+	// rrb) in ap040_xc7_ram2w and the dirty table (db) as a one-write
+	// distributed RAM, instead of flip-flops; same clock counts.  0:
+	// flip-flops, exactly as before (vendor-neutral, the Intel builds).
+	parameter XC7 = 0
 )
 (
 	input             clk,
@@ -366,6 +371,7 @@ localparam C_WAL   = 4'd14;  // (WALLOC) write-allocate launch: the store's row 
 // dirty ways (vb_keep): a dirty line is only ever dropped after it has been
 // pushed.  Only the DDR3 board's lines can be dirty (the wrapper's window),
 // and nothing but the CPU writes that memory, so a snoop never names one.
+// Written in g_dbff (flip-flops) or, with XC7, g_dbram (distributed RAM).
 reg   [3:0] db [0:63];
 // The push sequence (C_PUSH): the ways in p_mask of data-bank set p_set,
 // lowest first.  For each: four longwords read from the data RAM into
@@ -451,42 +457,66 @@ reg  [31:0] rdata_r;
 // the dirty lines (COPYBACK), which are only dropped after a push.
 // (S1b) The round-robin victim pointer lives beside them, since port B no
 // longer zeroes the row: a row clear resets it, as the zero row did.
+// (XC7) Both tables in distributed RAM instead (g_vbram), with the same
+// writes, reads and collision rule.
 reg  [3:0] vq;
 reg  [1:0] rq;
 wire [3:0] vb_keep = ((COPYBACK != 0) && !inv_idx[6]) ? db[inv_idx[5:0]] : 4'd0;
-// Every read of vb/rrb goes through these wires: the row port A looks up
-// or writes (registered into vq/rq), the row port B clears, and the
-// IFP/DFP paths' rows (their addresses are driven in those blocks).
+// Every read of vb/rrb goes through these wires, which either form below
+// drives: the row port A looks up or writes (registered into vq/rq), the
+// row port B clears, and the IFP/DFP paths' rows (their addresses are
+// driven in those blocks).
 wire [6:0] vb_ra_q = tag_we ? tag_widx : tag_ridx;
 wire [6:0] vb_ra_f, vb_ra_g, vb_ra_g1;
 wire [3:0] vb_q, vb_inv, vb_f, vb_g, vb_g1;
 wire [1:0] rrb_q;
-reg  [3:0] vb [0:127];      // flip-flops
-reg  [1:0] rrb [0:127];
-integer vbk;
-always @(posedge clk) begin
-	if (!nreset) begin
-		for (vbk = 0; vbk < 128; vbk = vbk + 1) begin
-			vb[vbk]  <= 4'd0;
-			rrb[vbk] <= 2'd0;
-		end
-	end else begin
-		if (ce & tag_we) begin
-			vb[tag_widx]  <= tag_wdat[91:88];
-			rrb[tag_widx] <= tag_wdat[93:92];
-		end
-		if (inv_wren) begin
-			vb[inv_idx]  <= vb[inv_idx] & vb_keep;
-			rrb[inv_idx] <= 2'd0;
+generate if (XC7 == 0) begin : g_vbff
+	reg  [3:0] vb [0:127];
+	reg  [1:0] rrb [0:127];
+	integer vbk;
+	always @(posedge clk) begin
+		if (!nreset) begin
+			for (vbk = 0; vbk < 128; vbk = vbk + 1) begin
+				vb[vbk]  <= 4'd0;
+				rrb[vbk] <= 2'd0;
+			end
+		end else begin
+			if (ce & tag_we) begin
+				vb[tag_widx]  <= tag_wdat[91:88];
+				rrb[tag_widx] <= tag_wdat[93:92];
+			end
+			if (inv_wren) begin
+				vb[inv_idx]  <= vb[inv_idx] & vb_keep;
+				rrb[inv_idx] <= 2'd0;
+			end
 		end
 	end
-end
-assign vb_q   = vb[vb_ra_q];
-assign vb_inv = vb[inv_idx];
-assign vb_f   = vb[vb_ra_f];
-assign vb_g   = vb[vb_ra_g];
-assign vb_g1  = vb[vb_ra_g1];
-assign rrb_q  = rrb[vb_ra_q];
+	assign vb_q   = vb[vb_ra_q];
+	assign vb_inv = vb[inv_idx];
+	assign vb_f   = vb[vb_ra_f];
+	assign vb_g   = vb[vb_ra_g];
+	assign vb_g1  = vb[vb_ra_g1];
+	assign rrb_q  = rrb[vb_ra_q];
+end else begin : g_vbram
+	// (XC7) the same two writes in distributed RAM: port 0 is port A's tag
+	// write, port 1 port B's row clear, which wins a same-row collision as
+	// it does above (and in the tag RAM).  No reset: the reset sweep
+	// (sweep_all) writes every row's valid and round-robin bits to zero
+	// through port A before the cache serves anything -- the arrangement
+	// the tag RAM already relies on -- and the IFP/DFP hits are gated by
+	// the CACR enables, which the same reset clears.
+	ap040_xc7_ram2w #(.AW(7), .DW(4), .NR(5)) u_vb (
+		.clk(clk),
+		.we0(ce & tag_we), .a0(tag_widx), .d0(tag_wdat[91:88]),
+		.we1(inv_wren),    .a1(inv_idx),  .d1(vb_inv & vb_keep),
+		.ra({vb_ra_g1, vb_ra_g, vb_ra_f, inv_idx, vb_ra_q}),
+		.rd({vb_g1, vb_g, vb_f, vb_inv, vb_q}));
+	ap040_xc7_ram2w #(.AW(7), .DW(2), .NR(1)) u_rrb (
+		.clk(clk),
+		.we0(ce & tag_we), .a0(tag_widx), .d0(tag_wdat[93:92]),
+		.we1(inv_wren),    .a1(inv_idx),  .d1(2'd0),
+		.ra(vb_ra_q), .rd(rrb_q));
+end endgenerate
 always @(posedge clk) begin
 	vq <= vb_q;
 	rq <= rrb_q;
@@ -976,19 +1006,53 @@ wire look_dirty = (COPYBACK != 0) && !r_row[6] && db[r_row[5:0]][hit_way];
 
 // dirty bits: set by a copyback store's merge, cleared when the way is
 // pushed (or its push fails) and when a fill replaces the line
-integer dbk;
-always @(posedge clk) begin
-	if (!nreset) begin
-		for (dbk = 0; dbk < 64; dbk = dbk + 1) db[dbk] <= 4'd0;
-	end else if (ce && (COPYBACK != 0)) begin
-		if (st_mrg && r_cb) db[r_row[5:0]][hit_way] <= 1'b1;
-		if ((cst == C_PUSH) && push_out && m_err)
-			db[p_set] <= db[p_set] & ~p_mask;
-		else if ((cst == C_PUSH) && push_out && m_ack && (p_wb == 2'd3))
-			db[p_set][p_way] <= 1'b0;
-		if ((cst == C_TAGW) && !r_row[6]) db[r_row[5:0]][r_way] <= wa_ok;
+generate if (XC7 == 0) begin : g_dbff
+	integer dbk;
+	always @(posedge clk) begin
+		if (!nreset) begin
+			for (dbk = 0; dbk < 64; dbk = dbk + 1) db[dbk] <= 4'd0;
+		end else if (ce && (COPYBACK != 0)) begin
+			if (st_mrg && r_cb) db[r_row[5:0]][hit_way] <= 1'b1;
+			if ((cst == C_PUSH) && push_out && m_err)
+				db[p_set] <= db[p_set] & ~p_mask;
+			else if ((cst == C_PUSH) && push_out && m_ack && (p_wb == 2'd3))
+				db[p_set][p_way] <= 1'b0;
+			if ((cst == C_TAGW) && !r_row[6]) db[r_row[5:0]][r_way] <= wa_ok;
+		end
 	end
-end
+end else begin : g_dbram
+	// (XC7) the same table in distributed RAM with ONE write port.  The
+	// writes above never meet in a clock -- the merge's set bit comes in
+	// C_PASS or C_MST2, the push's clears in C_PUSH, the fill's bit in
+	// C_TAGW -- so each clock's one write is a read-modify-write of its
+	// row (the read at the write address is the RAM's own).  No reset: the
+	// reset sweep (sweep_all, C_SWEEP) writes the 64 rows to zero, one per
+	// clock, before the cache serves anything; a CINV sweep does not (it
+	// pushes the dirty ways, which clears them).  tb/tb_xc7_check.v checks
+	// the one-write rule on every clock.
+	wire       dw_set = st_mrg && r_cb;
+	wire       dw_err = (cst == C_PUSH) && push_out && m_err;
+	wire       dw_ack = (cst == C_PUSH) && push_out && m_ack && (p_wb == 2'd3);
+	wire       dw_tag = (cst == C_TAGW) && !r_row[6];
+	wire       dw_swp = (cst == C_SWEEP) && sweep_all && !sweep_cnt[6];
+	wire [5:0] dw_row = (cst == C_PUSH)  ? p_set :
+	                    (cst == C_SWEEP) ? sweep_cnt[5:0] : r_row[5:0];
+	wire [3:0] dw_old = db[dw_row];
+	reg  [3:0] dw_d;
+	always @* begin
+		dw_d = dw_old;
+		if (dw_swp) dw_d = 4'd0;
+		if (dw_set) dw_d[hit_way] = 1'b1;
+		if (dw_err) dw_d = dw_d & ~p_mask;
+		else if (dw_ack) dw_d[p_way] = 1'b0;
+		if (dw_tag) dw_d[r_way] = wa_ok;
+	end
+	always @(posedge clk)
+		if (ce && (COPYBACK != 0) && (dw_set || dw_err || dw_ack || dw_tag || dw_swp))
+			db[dw_row] <= dw_d;
+	integer dbk;
+	initial for (dbk = 0; dbk < 64; dbk = dbk + 1) db[dbk] = 4'd0;
+end endgenerate
 assign cd_we     = ((cst == C_FILL) && r_issued && m_ack) ? (4'd1 << r_way) :
                    (cst == C_FILLW)                        ? (4'd1 << r_way) :
                    st_mrg                                  ? (4'd1 << hit_way) :

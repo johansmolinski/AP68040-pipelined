@@ -73,8 +73,24 @@ always @(negedge clk) begin
 	else             s_stb_storm <= 1'b0;
 end
 
+// -DAP040_PIPE_CACHE: the pipelined core's rtl/compat/ap040_cache.v (the
+// suite's unit:cache_snoop legs) instead of rtl_old/'s -- its extra inputs
+// tied off (no copyback page, no walker, no fast read paths, no fill
+// channel) and -DXC7=1 for its tables in distributed RAM (AP040_XC7).
+`ifdef AP040_PIPE_CACHE
+`ifndef XC7
+`define XC7 0
+`endif
+ap040_cache #(.XC7(`XC7)) dut
+(
+	.c_cb(1'b0), .walk_busy(1'b0), .wk_pend(1'b0), .wk_addr(32'd0),
+	.ifp_en(1'b0), .ifp_addr(32'd0), .ifp_ptag(22'd0),
+	.dfp_en(1'b0), .dfp_addr(32'd0), .dfp_size(2'd0), .dfp_ptag(22'd0),
+	.fill_ok(1'b0), .fill_data(128'd0), .fill_ack(1'b0), .fill_err(1'b0),
+`else
 ap040_cache dut
 (
+`endif
 	.clk(clk), .nreset(nreset), .ce(ce),
 	.ie(1'b1), .de(1'b1),
 	.cinv_req(cinv_req), .cinv_ic(cinv_ic), .cinv_dc(cinv_dc),
