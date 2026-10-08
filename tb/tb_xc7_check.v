@@ -42,7 +42,7 @@ reg [3:0] s_vb  [0:127];
 reg [1:0] s_rrb [0:127];
 reg [3:0] s_db  [0:63];
 
-integer n_clk = 0, n_cmp = 0, n_bad = 0, n_multi = 0, n_sweeps = 0;
+integer n_clk = 0, n_cmp = 0, n_bad = 0, n_multi = 0, n_sweeps = 0, n_coll = 0, n_both = 0;
 integer k;
 reg     armed = 1'b0;       // compared at the edge before
 wire    end_mark = `TB.dut.mem_ack && `TB.dut.mem_write && `TB.dut.mem_addr[15:0] == 16'hF102;
@@ -111,6 +111,12 @@ always @(posedge `TB.clk) begin
 			         w_set, w_err | w_ack, w_tag, n_clk);
 	end
 	if (nreset && swp_all && `CC.sweep_cnt == 7'd127 && ce) n_sweeps = n_sweeps + 1;
+	// how often vb/rrb's two writes meet (both ports; the same row: the
+	// collision rule), so a run shows what it exercised
+	if (nreset && ce && `CC.tag_we && `CC.inv_wren) begin
+		n_both = n_both + 1;
+		if (`CC.tag_widx == `CC.inv_idx) n_coll = n_coll + 1;
+	end
 	// update the shadow: ap040_cache.v's flip-flop forms (g_vbff, g_dbff)
 	if (!nreset) begin
 		for (k = 0; k < 128; k = k + 1) begin
@@ -141,7 +147,7 @@ end
 // the count, so a run shows the check ran (the program's end marker)
 always @(posedge `TB.clk)
 	if (end_mark)
-		$display("XC7-CHECK: %0d table reads compared over %0d clocks after %0d reset sweeps, %0d mismatches, %0d clocks with two dirty-table writes",
-		         n_cmp, n_clk, n_sweeps, n_bad, n_multi);
+		$display("XC7-CHECK: %0d table reads compared over %0d clocks after %0d reset sweeps, %0d mismatches, %0d clocks with two dirty-table writes; valid-table writes on both ports in %0d clocks, %0d on one row",
+		         n_cmp, n_clk, n_sweeps, n_bad, n_multi, n_both, n_coll);
 
 endmodule
