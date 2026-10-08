@@ -15,7 +15,8 @@
 // dfp_m2 (the answer clock of a two-lookup read) and d_rd_fast (the answer
 // taken), the cache copy's kept set/way of the first longword and the set of
 // the second, the cache's write strobes (tag, data, invalidate -- snoops
-// are not clock-enabled) and its valid bits.
+// are not clock-enabled) and its valid bits (through the cache's read wire
+// vb_g1, which either form of the table drives).
 `timescale 1ns/1ps
 module tb_dfpmis_check;
 
@@ -61,7 +62,9 @@ always @(posedge `TB.clk) begin
 			n_viol = n_viol + 1;
 			$display("FAIL: dfpmis-check: answer taken outside the cache's second-lookup clock (t=%0d)", t);
 		end
-		if (((`CC.vb[{1'b0, set1}] & way1) == 4'd0) || way1 == 4'd0) begin
+		// vb_g1: the valid bits of the first longword's row (set1), as g_dfp
+		// reads them -- from the flip-flops or, with XC7, the LUTRAM
+		if (((`CC.vb_g1 & way1) == 4'd0) || way1 == 4'd0) begin
 			n_viol = n_viol + 1;
 			$display("FAIL: dfpmis-check: first longword's line (set %0d way %b) not valid at the answer (t=%0d)", set1, way1, t);
 		end

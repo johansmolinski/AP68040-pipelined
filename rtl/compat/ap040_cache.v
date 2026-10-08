@@ -451,11 +451,18 @@ reg  [31:0] rdata_r;
 // the dirty lines (COPYBACK), which are only dropped after a push.
 // (S1b) The round-robin victim pointer lives beside them, since port B no
 // longer zeroes the row: a row clear resets it, as the zero row did.
-reg  [3:0] vb [0:127];
 reg  [3:0] vq;
-reg  [1:0] rrb [0:127];
 reg  [1:0] rq;
 wire [3:0] vb_keep = ((COPYBACK != 0) && !inv_idx[6]) ? db[inv_idx[5:0]] : 4'd0;
+// Every read of vb/rrb goes through these wires: the row port A looks up
+// or writes (registered into vq/rq), the row port B clears, and the
+// IFP/DFP paths' rows (their addresses are driven in those blocks).
+wire [6:0] vb_ra_q = tag_we ? tag_widx : tag_ridx;
+wire [6:0] vb_ra_f, vb_ra_g, vb_ra_g1;
+wire [3:0] vb_q, vb_inv, vb_f, vb_g, vb_g1;
+wire [1:0] rrb_q;
+reg  [3:0] vb [0:127];      // flip-flops
+reg  [1:0] rrb [0:127];
 integer vbk;
 always @(posedge clk) begin
 	if (!nreset) begin
@@ -473,8 +480,16 @@ always @(posedge clk) begin
 			rrb[inv_idx] <= 2'd0;
 		end
 	end
-	vq <= vb[tag_we ? tag_widx : tag_ridx];
-	rq <= rrb[tag_we ? tag_widx : tag_ridx];
+end
+assign vb_q   = vb[vb_ra_q];
+assign vb_inv = vb[inv_idx];
+assign vb_f   = vb[vb_ra_f];
+assign vb_g   = vb[vb_ra_g];
+assign vb_g1  = vb[vb_ra_g1];
+assign rrb_q  = rrb[vb_ra_q];
+always @(posedge clk) begin
+	vq <= vb_q;
+	rq <= rrb_q;
 end
 
 wire [21:0] t_w0 = tag_q[21:0];
@@ -1738,7 +1753,8 @@ if (IFP != 0) begin : g_ifp
 	end
 	wire [3:0] mask_now  = (fill_st && r_row[6] && r_row[5:0] == f_set) ? (4'd1 << r_way) : 4'd0;
 	wire [3:0] mask_prev = (fm_v && fm_set == f_set) ? (4'd1 << fm_way) : 4'd0;
-	wire [3:0] vv = vb[{1'b1, f_set}] & ~mask_now & ~mask_prev;
+	assign vb_ra_f = {1'b1, f_set};
+	wire [3:0] vv = vb_f & ~mask_now & ~mask_prev;
 	wire g0 = vv[0] && (itag_q[21:0]  == ifp_ptag);
 	wire g1 = vv[1] && (itag_q[43:22] == ifp_ptag);
 	wire g2 = vv[2] && (itag_q[65:44] == ifp_ptag);
@@ -1746,6 +1762,7 @@ if (IFP != 0) begin : g_ifp
 	assign ifp_thit  = g0 | g1 | g2 | g3;
 	assign ifp_rdata = g0 ? idat_q0 : g1 ? idat_q1 : g2 ? idat_q2 : idat_q3;
 end else begin : g_noifp
+	assign vb_ra_f   = 7'd0;
 	assign ifp_thit  = 1'b0;
 	assign ifp_rdata = 32'd0;
 	wire unused_ifp = ifp_en | (|ifp_addr) | (|ifp_ptag);
@@ -1868,7 +1885,8 @@ if (IFP != 0) begin : g_dfp
 	wire       d_busy_now = (w_inv && inv_idx[5:0] == g_set) ||
 	                        (w_tag && tag_widx[5:0] == g_set) ||
 	                        (w_dat && cd_widx[7:2] == g_set);
-	wire [3:0] dvv = vb[{1'b0, g_set}] & ~dmask_now & ~dmask_prev;
+	assign vb_ra_g = {1'b0, g_set};
+	wire [3:0] dvv = vb_g & ~dmask_now & ~dmask_prev;
 	// (DFP_MIS) the compare runs against both candidate tags -- the
 	// requester's for a lookup answered now, the kept second-longword tag
 	// in the misaligned read's third clock -- and the choice is made after
@@ -1890,17 +1908,20 @@ if (IFP != 0) begin : g_dfp
 	// (DFP_MIS) the first longword in the third clock: its line still valid
 	// (a snoop may have landed on any clock edge since), not being filled,
 	// and no write reaching its set at this edge
+	assign vb_ra_g1 = {1'b0, g_set1};
 	wire [3:0] dmask1_now  = (fill_d && r_row[5:0] == g_set1) ? (4'd1 << r_way) : 4'd0;
 	wire [3:0] dmask1_prev = (dm_v && dm_set == g_set1) ? (4'd1 << dm_way) : 4'd0;
 	wire       d1_busy     = (w_inv && inv_idx[5:0] == g_set1) ||
 	                         (w_tag && tag_widx[5:0] == g_set1) ||
 	                         (w_dat && cd_widx[7:2] == g_set1);
 	wire       h1_ok       = (DFP_MIS != 0) && g_h1 && !d1_busy &&
-	                         (|(vb[{1'b0, g_set1}] & ~dmask1_now & ~dmask1_prev & g_way1));
+	                         (|(vb_g1 & ~dmask1_now & ~dmask1_prev & g_way1));
 	assign dfp_thit  = thit_now && (!g_m2 || h1_ok);
 	assign dfp_two   = (DFP_MIS != 0) && g_two;
 	assign dfp_rdata = lw_extract2(g_d1, dsel, g_size, g_off, g_m2);
 end else begin : g_nodfp
+	assign vb_ra_g   = 7'd0;
+	assign vb_ra_g1  = 7'd0;
 	assign dfp_thit  = 1'b0;
 	assign dfp_two   = 1'b0;
 	assign dfp_rdata = 32'd0;
