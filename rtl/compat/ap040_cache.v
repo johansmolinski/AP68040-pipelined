@@ -766,7 +766,12 @@ assign m_write = dr_active   ? 1'b1 :
                  fill_active ? 1'b0 : (st_posted ? 1'b1 : c_write);
 // (WALLOC) the allocate's fill is a data read with the store's FC: the
 // core presents its NEXT request meanwhile (often an instruction fetch),
-// so c_instr/c_fc are not the fill's (FILL_CHANNEL = 0, the board's path)
+// so c_instr/c_fc are not the fill's (FILL_CHANNEL = 0, the board's path).
+// No field of the fill may follow the core at all: c_wdata moves too when
+// that next request is a store, and the SoC latches every m_* field across
+// its clock crossing for as long as an access is outstanding (TG68K.vhd
+// q_req, sim/ddr3_cpu FC-1/FC-1b).  While wa_v the fill's every field is
+// the cache's own: r_wdata/r_fc, the store's, held from wa_go to C_TAGW.
 wire        wa_m    = (WALLOC != 0) && wa_v;
 assign m_instr = (dr_active | st_posted | push_out | wa_m) ? 1'b0 : c_instr;
 assign m_size  = dr_active   ? dr_size :
@@ -776,7 +781,7 @@ assign m_addr  = dr_active   ? dr_addr :
                  push_out    ? {p_tag, p_set, p_wb, 2'b00} :
                  fill_active ? {r_addr[31:4], r_beat, 2'b00}
                              : (st_posted ? r_addr : c_addr);
-assign m_wdata = dr_active ? dr_wdata : push_out ? pbuf_w : (st_posted ? r_wdata : c_wdata);
+assign m_wdata = dr_active ? dr_wdata : push_out ? pbuf_w : ((st_posted | wa_m) ? r_wdata : c_wdata);
 assign m_fc    = dr_active ? dr_fc    : push_out ? 3'd5   : ((st_posted | wa_m) ? r_fc : c_fc);
 
 // A posted store was acknowledged from ack_r at acceptance; the memory
