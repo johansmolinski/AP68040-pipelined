@@ -1306,12 +1306,47 @@ initial begin
 	u_sbc.settle;
 	u_sbc.report("compat");
 	errors = errors + u_sbc.bad;
+	$display("CROSSING-CHECK: %0d accesses on m_*, %0d changed a field before their answer", xm_n, xm_errs);
 	if (errors == 0) $display("ALL TESTS PASSED");
 	else             $display("TEST FAILED with %0d errors", errors);
 	// differential testing: dump the data window for comparison
 	if (errors == 0 && $value$plusargs("dump=%s", dump_file))
 		$writememh(dump_file, mem, 'h3000 >> 1, ('h4000 >> 1) - 1);
 	$finish;
+end
+
+// The master port's crossing rule (MinimigAGA_TC64 sim/ddr3_cpu, FC-1b): an
+// access on m_* keeps EVERY field -- req, write, instr, size, fc, addr and
+// wdata, read or write -- from the edge it is first presented to the edge
+// that answers it (an enabled edge with the acknowledge or a bus error).
+// The SoC's sequencers latch m_* across a multicycle clock crossing and the
+// adapters read them over their 16-bit sub-cycles, so a field that moves
+// under an outstanding access is a broken contract even where the value is
+// "unused" (a read's wdata).  Before this check the cache's write-allocate
+// fill (WALLOC, FILLCH=0) let the core's NEXT request show through on the
+// fields the fill does not own -- a program cannot see it, only this rule can.
+wire [71:0] xm_now = {dut.m_req, dut.m_write, dut.m_instr, dut.m_size, dut.m_fc,
+                      dut.m_addr, dut.m_wdata};
+reg  [71:0] xm_prev = 72'd0;
+reg         xm_open = 1'b0;
+integer     xm_errs = 0, xm_n = 0;
+always @(posedge clk) begin
+	if (!nreset) xm_open <= 1'b0;
+	else begin
+		if (xm_open && xm_now !== xm_prev) begin
+			xm_errs = xm_errs + 1;
+			errors  = errors + 1;
+			if (xm_errs <= 8)
+				$display("FAIL: crossing: m_* changed under an outstanding access (t=%0t): req %b>%b we %b>%b ir %b>%b sz %0d>%0d fc %0d>%0d addr %h>%h wd %h>%h",
+				         $time, xm_prev[71], xm_now[71], xm_prev[70], xm_now[70], xm_prev[69], xm_now[69],
+				         xm_prev[68:67], xm_now[68:67], xm_prev[66:64], xm_now[66:64],
+				         xm_prev[63:32], xm_now[63:32], xm_prev[31:0], xm_now[31:0]);
+		end
+		if (dut.m_req && !xm_open) xm_n = xm_n + 1;
+		// open: up at this edge and not answered by it
+		xm_open <= dut.m_req && !(dut.ce_core && (dut.b_ack || berr));
+		xm_prev <= xm_now;
+	end
 end
 
 // the store order on the core's memory port (findings/storebuf/plan.md)

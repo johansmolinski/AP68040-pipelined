@@ -317,13 +317,16 @@ if [ -n "$AP040_REF" ] && [ -f "$AP040_REF/tb/asm/t_integer.s" ] && command -v v
 	# FILL_CHANNEL = 0): t_cbwa_pipe once more -- the allocate's fill runs
 	# while the core already presents its next request -- and
 	# t_cbwaerr_pipe, the allocate's fill taking a bus error (the bench's
-	# channel cannot fail a fill)
+	# channel cannot fail a fill) -- and t_cb_pipe, whose allocate fills run
+	# while the core presents its next STORE: the bench's crossing check (no
+	# m_* field moves under an outstanding access) is red there on a fill
+	# that lets c_wdata through
 	iverilog -g2012 $SBDEF -Ptb_ap040_pipe_compat.FILLCH=0 -I "$RTL" -I "$RTL/compat" -o "$WORK/tb_compat_fill0.vvp" \
 		tb_ap040_pipe_compat.v tb_sb_check.v ${PIPE_DFP_MIS:+tb_dfpmis_check.v} $CSRC > "$WORK/tb_compat_fill0.clog" 2>&1 || {
 		echo "  COMPILE-ERROR compat fill0 bench"; grep -v "constant selects" "$WORK/tb_compat_fill0.clog" | head -5; exit 1; }
 	vasmm68k_mot -Fbin -m68040 -no-opt -quiet -o "$WORK/t_cbwaerr_pipe.bin" cache_asm/t_cbwaerr_pipe.s &&
 	python3 bin2hex.py "$WORK/t_cbwaerr_pipe.bin" "$WORK/t_cbwaerr_pipe.hex"
-	for t in t_cbwa_pipe t_cbwaerr_pipe; do
+	for t in t_cbwa_pipe t_cbwaerr_pipe t_cb_pipe; do
 		if timeout 1800 vvp "$WORK/tb_compat_fill0.vvp" +prog="$WORK/$t.hex" > "$WORK/compat_fill0_$t.log" 2>&1 &&
 		   grep -q "ALL TESTS PASSED" "$WORK/compat_fill0_$t.log"; then
 			echo "  pass  compat-fill0:$t"
