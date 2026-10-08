@@ -224,6 +224,12 @@ else
 	echo "  (vasmm68k_mot not found: program benches skipped)"
 fi
 
+# (AP040_XC7) the two-write distributed-RAM table the cache's valid and
+# round-robin bits move into, against the flip-flop table it replaces
+iverilog -g2012 -o "$WORK/tb_xc7_ram2w.vvp" tb_ap040_xc7_ram2w.v "$RTL/compat/ap040_xc7_ram2w.v" > "$WORK/tb_xc7_ram2w.clog" 2>&1 &&
+vvp "$WORK/tb_xc7_ram2w.vvp" > "$WORK/unit_xc7_ram2w.log" 2>&1 && grep -q "ALL TESTS PASSED" "$WORK/unit_xc7_ram2w.log" &&
+	echo "  pass  unit:xc7_ram2w" || { echo "  FAIL  unit:xc7_ram2w  (see $WORK/unit_xc7_ram2w.log)"; fail=1; }
+
 # the wrapper (plan M5): ap040_pipe_tg68k_compat with the reference's cache,
 # MMU (M7) and 16-bit adapter, lib/AP68040's program bench (three wait
 # profiles) on the reference's t_integer.s, t_bitfield_mmu.s and t_mmu.s.  AP040_REF points at lib/AP68040.
