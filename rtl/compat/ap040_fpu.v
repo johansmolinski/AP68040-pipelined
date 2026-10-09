@@ -422,6 +422,48 @@ reg  [2:0] wb_grs;
 reg        fstate_e1;    // the prepared/restored frame is an arithmetic
                          // E1 state, not an unimplemented instruction
 
+// (XC7, findings xc7 candidate 4) The frame registers are written from a
+// dozen places -- the dispatch cycle, F_SRC, F_EXEC, F_BIN, the deferred
+// capture, FRESTORE -- each with its own 96-bit source expression, and in
+// the original form every field's next value is a priority chain over all
+// of them (~3,500 LUTs of input muxing on the Artix-7).  With XC7 = 1 each
+// of those places only NAMES its sources: three selectors, assigned
+// blocking in program order (so the last writer in a clock still wins,
+// exactly as the nonblocking writes it replaces), and ONE write per field
+// at the end of the clock reads the named source.  Same clock, same value:
+// the frame registers hold bit-for-bit what the original form gives them,
+// every clock.  The fields go in three groups that are always written
+// together:
+//   E: ETEMP, STAG, CMDREG1B, CMDREG3B   (fx_es)
+//   F: FPTEMP, DTAG                      (fx_fs)
+//   W: WBTEMP, FPIARCU                   (fx_ws)
+// Flags, GRS, WBTE15 and the state bits keep their original writes.
+localparam [3:0] ES_HOLD = 4'd0,
+                 ES_FR   = 4'd1,  // FP[src_r] and its tag (dispatch)
+                 ES_ZERO = 4'd2,  // 0, STAG 1 (FMOVECR)
+                 ES_PK   = 4'd3,  // packed source low 64 bits, STAG 7
+                 ES_A    = 4'd4,  // the converted operand a_*, r_stag
+                 ES_SGL  = 4'd5,  // single denormal 0.f under $3F80, STAG 5
+                 ES_DBL  = 4'd6,  // double denormal 0.f under $3C00, STAG 5
+                 ES_RX   = 4'd7,  // extended memory operand r_din, its tag
+                 ES_SHS  = 4'd8,  // the operand shadow sh_src / sh_stag
+                 ES_RST  = 4'd9;  // FRESTORE
+localparam [2:0] FS_HOLD = 3'd0,
+                 FS_FRS  = 3'd1,  // FP[src_r] and its tag (dispatch, opclass 011)
+                 FS_PK   = 3'd2,  // packed source split, DTAG 0
+                 FS_ZERO = 3'd3,  // 0, DTAG 0
+                 FS_SHD  = 3'd4,  // sh_dst / sh_dtag
+                 FS_RST  = 3'd5,  // FRESTORE
+                 FS_FRD  = 3'd6,  // FP[dst_r] and its tag (dispatch)
+                 FS_FRR  = 3'd7;  // FP[r_dst] and its tag (after dispatch)
+localparam [1:0] WS_HOLD = 2'd0,
+                 WS_DT   = 2'd1,  // datatype frame: WBTEMP 0, FPIAR (side port first)
+                 WS_P2   = 2'd2,  // E3 capture: the F_ROUND intermediate, FPIAR
+                 WS_RST  = 2'd3;  // FRESTORE
+reg  [3:0] fx_es;     // blocking temporaries of the FSM clock (XC7 only)
+reg  [2:0] fx_fs;
+reg  [1:0] fx_ws;
+
 assign cur_vec = fp_exception_vector(fpsr[15:8] & fpcr[15:8]);
 
 // WinUAE's e3 predicate: OVFL/UNFL/INEX from the five arithmetic ops
@@ -486,13 +528,22 @@ task capture_unimp;
 	input  [2:0] stag;
 	input [95:0] dst;
 	input  [2:0] dtag;
+	input  [3:0] es;        // (XC7) the same sources, named: src/stag/cmd
+	input  [2:0] fs;        //       dst/dtag
 	reg   [15:0] c1;
 	begin
 		c1 = frame_cmd1(cmd);
+		if (XC7) begin
+			fx_es = es; fx_fs = fs;
+		end
+		else begin
 		fstate_cmd1  <= c1;
 		fstate_cmd3  <= frame_cmd3(c1);
 		fstate_stag  <= stag;
 		fstate_dtag  <= dtag;
+		fstate_fpt   <= dst;
+		fstate_et    <= src;
+		end
 		// E1/E3/T are the ARITHMETIC exception-pending bits and stay CLEAR
 		// on the unimplemented-instruction frame.  WinUAE sets them only in
 		// fpsr_check_arithmetic_exception (e1/e3 classes) and for a packed
@@ -503,8 +554,6 @@ task capture_unimp;
 		// claiming one sends its dispatch down the arithmetic path.
 		fstate_flags <= 3'b000; // E1=E3=T=0
 
-		fstate_fpt   <= dst;
-		fstate_et    <= src;
 		fstate_e1    <= 0;
 		fstate_grs   <= 0;
 		fstate_wbte15 <= 0;
@@ -535,23 +584,30 @@ task capture_datatype;
 	input  [2:0] dtag;
 	input        t_flag;    // OPCLASS 011 register store
 	input        e1_flag;   // packed operand
+	input  [3:0] es;        // (XC7) as capture_unimp
+	input  [2:0] fs;
 	reg   [15:0] c1;
 	begin
 		c1 = frame_cmd1(cmd);
+		if (XC7) begin
+			fx_es = es; fx_fs = fs; fx_ws = WS_DT;
+		end
+		else begin
 		fstate_cmd1  <= c1;
 		fstate_cmd3  <= frame_cmd3(c1);
 		fstate_stag  <= stag;
 		fstate_dtag  <= dtag;
-		fstate_flags <= {e1_flag, 1'b0, t_flag};   // {E1,E3,T}
 		fstate_fpt   <= dst;
 		fstate_et    <= src;
-		fstate_grs   <= 0;
-		fstate_wbte15 <= 0;
 		fstate_wbt   <= 0;
 		// (upstream a8a50ce) stores can dispatch on the same edge as the
 		// FPIAR side-port update: capture this instruction, not the previous
 		// FPIAR value
 		fstate_fpiar_c <= ia_we ? ia_wdata : fpiar;
+		end
+		fstate_flags <= {e1_flag, 1'b0, t_flag};   // {E1,E3,T}
+		fstate_grs   <= 0;
+		fstate_wbte15 <= 0;
 		fstate_busy  <= 1;
 		fstate_e1    <= e1_flag;
 		// fstate_unimp marks "a frame is prepared", so FSAVE extracts it
@@ -604,6 +660,7 @@ always @(posedge clk) begin
 		unimp <= 0;
 		unsupp <= 0;
 		exc_req <= 0;
+		fx_es = ES_HOLD; fx_fs = FS_HOLD; fx_ws = WS_HOLD;
 
 		// side ports, independent of the FSM
 		if (cr_we) begin
@@ -640,13 +697,18 @@ always @(posedge clk) begin
 			pv = fp_exception_vector(fpsr[15:8] & fpcr[15:8]);
 			if (pv == `AP040_VEC_FP_SNAN || pv == `AP040_VEC_FP_OPERR ||
 			    pv == `AP040_VEC_FP_DZ || !arith5(sh_cmd[6:0])) begin
+				if (XC7) begin
+					fx_es = ES_SHS; fx_fs = FS_ZERO;
+				end
+				else begin
 				fstate_cmd1  <= frame_cmd1(sh_cmd);
 				fstate_cmd3  <= frame_cmd3(frame_cmd1(sh_cmd));
 				fstate_stag  <= sh_stag;
 				fstate_dtag  <= 0;
-				fstate_flags <= 3'b100;   // E1
 				fstate_fpt   <= 0;
 				fstate_et    <= sh_src;
+				end
+				fstate_flags <= 3'b100;   // E1
 				fstate_grs   <= (pv == `AP040_VEC_FP_SNAN) ? 3'd7 : 3'd1;
 				fstate_wbte15 <= (pv == `AP040_VEC_FP_SNAN);
 				fstate_busy  <= 0;
@@ -659,6 +721,12 @@ always @(posedge clk) begin
 				// intermediate captured at F_ROUND (WinUAE's 68040 BUSY
 				// recipe: e3, swizzled CMDREG3B, WBTEMP+GRS, src and dst
 				// operands -- dst only for the dyadic ops)
+				if (XC7) begin
+					fx_es = ES_SHS;
+					fx_fs = (sh_cmd[5:4] == 2'b10) ? FS_SHD : FS_ZERO;
+					fx_ws = WS_P2;
+				end
+				else begin
 				fstate_cmd1  <= frame_cmd1(sh_cmd);
 				fstate_cmd3  <= frame_cmd3(frame_cmd1(sh_cmd));
 				fstate_stag  <= sh_stag;
@@ -671,11 +739,12 @@ always @(posedge clk) begin
 					fstate_fpt  <= 0;
 					fstate_dtag <= 0;
 				end
+				fstate_wbt   <= {wb_s, wb_e[14:0], 16'd0, wb_m};
+				fstate_fpiar_c <= fpiar;
+				end
 				fstate_flags <= 3'b010;   // E3
 				fstate_grs   <= wb_grs;
 				fstate_wbte15 <= (pv == `AP040_VEC_FP_UNFL);
-				fstate_wbt   <= {wb_s, wb_e[14:0], 16'd0, wb_m};
-				fstate_fpiar_c <= fpiar;
 				fstate_busy  <= 1;
 				fstate_e1    <= 1;        // arithmetic E-state (either tier)
 				fstate_unimp <= 1;
@@ -724,18 +793,23 @@ always @(posedge clk) begin
 			// AP040 already models that separately through fstate_e1 and
 			// frestore_e1_pend below, so nothing is lost here.
 			fstate_resig <= 0;
+			if (XC7) begin
+				fx_es = ES_RST; fx_fs = FS_RST; fx_ws = WS_RST;
+			end
+			else begin
 			fstate_cmd1 <= frestore_cmd1;
 			fstate_cmd3 <= frestore_cmd3;
 			fstate_stag <= frestore_stag;
 			fstate_dtag <= frestore_dtag;
-			fstate_flags <= frestore_flags;
 			fstate_fpt <= frestore_fpt;
 			fstate_et <= frestore_et;
+			fstate_wbt <= frestore_wbt;
+			fstate_fpiar_c <= frestore_fpiar;
+			end
+			fstate_flags <= frestore_flags;
 			fstate_grs <= frestore_grs;
 			fstate_wbte15 <= frestore_wbte15;
 			fstate_busy <= frestore_busy;
-			fstate_wbt <= frestore_wbt;
-			fstate_fpiar_c <= frestore_fpiar;
 			// an E1 frame whose command the hardware implements is a
 			// deferred ARITHMETIC exception, not an unimplemented
 			// instruction: the core re-arms the pend (frestore_e1_pend)
@@ -817,7 +891,8 @@ always @(posedge clk) begin
 						    frame_tag_x(fr_e[src_r], fr_m[src_r]),
 						    {fr_s[src_r], fr_e[src_r], 16'd0, fr_m[src_r]},
 						    frame_tag_x(fr_e[src_r], fr_m[src_r]),
-						    1'b1, 1'b1);   // T, packed -> E1
+						    1'b1, 1'b1,    // T, packed -> E1
+						    ES_FR, FS_FRS);
 					end
 					else if (unsupported_x(fr_e[src_r], fr_m[src_r])) begin
 						unsupp <= 1;
@@ -826,7 +901,8 @@ always @(posedge clk) begin
 						    frame_tag_x(fr_e[src_r], fr_m[src_r]),
 						    {fr_s[src_r], fr_e[src_r], 16'd0, fr_m[src_r]},
 						    frame_tag_x(fr_e[src_r], fr_m[src_r]),
-						    1'b1, 1'b0);   // T, not packed
+						    1'b1, 1'b0,    // T, not packed
+						    ES_FR, FS_FRS);
 					end
 					else begin
 						{a_s, a_e, a_m, a_t} <=
@@ -839,7 +915,8 @@ always @(posedge clk) begin
 					capture_unimp({op_class, src_fmt, dst_r, opmode},
 					               96'd0, 3'd1,
 					               {fr_s[dst_r], fr_e[dst_r], 16'd0, fr_m[dst_r]},
-					               frame_tag_x(fr_e[dst_r], fr_m[dst_r]));
+					               frame_tag_x(fr_e[dst_r], fr_m[dst_r]),
+					               ES_ZERO, FS_FRD);
 				end
 				else if (!op_in_hw(opmode)) begin : save_unimp_command
 					if (op_class == 3'b000) begin
@@ -847,7 +924,8 @@ always @(posedge clk) begin
 						               {fr_s[src_r], fr_e[src_r], 16'd0, fr_m[src_r]},
 						               frame_tag_x(fr_e[src_r], fr_m[src_r]),
 						               {fr_s[dst_r], fr_e[dst_r], 16'd0, fr_m[dst_r]},
-						               frame_tag_x(fr_e[dst_r], fr_m[dst_r]));
+						               frame_tag_x(fr_e[dst_r], fr_m[dst_r]),
+						               ES_FR, FS_FRD);
 					end
 					else if (src_fmt == 3'd3) begin
 						// (upstream a8a50ce) Packed operands use the same split
@@ -855,7 +933,8 @@ always @(posedge clk) begin
 						// datatype BUSY frame.
 						capture_unimp({op_class, src_fmt, dst_r, opmode},
 						               {32'd0, din[63:0]}, 3'd7,
-						               {32'd0, din[63:32], din[95:64]}, 3'd0);
+						               {32'd0, din[63:32], din[95:64]}, 3'd0,
+						               ES_PK, FS_PK);
 						fstate_flags <= 3'b100; // E1 tells get_op to unpack
 					end
 					else begin
@@ -876,7 +955,8 @@ always @(posedge clk) begin
 						    frame_tag_x(fr_e[src_r], fr_m[src_r]),
 						    {fr_s[dst_r], fr_e[dst_r], 16'd0, fr_m[dst_r]},
 						    frame_tag_x(fr_e[dst_r], fr_m[dst_r]),
-						    1'b0, 1'b0);
+						    1'b0, 1'b0,
+						    ES_FR, FS_FRD);
 					end
 					else begin
 					{a_s, a_e, a_m, a_t} <=
@@ -898,7 +978,8 @@ always @(posedge clk) begin
 						capture_datatype({op_class, src_fmt, dst_r, opmode},
 						    {32'd0, din[63:0]}, 3'd7,
 						    {32'd0, din[63:32], din[95:64]}, 3'd0,
-						    1'b0, 1'b1);   // packed -> E1, stag 7
+						    1'b0, 1'b1,    // packed -> E1, stag 7
+						    ES_PK, FS_PK);
 					end
 					else begin
 						a_t <= T_NUM;   // provisional; F_SRC classifies
@@ -1152,7 +1233,8 @@ always @(posedge clk) begin
 										    {fr_s[r_dst], fr_e[r_dst], 16'd0,
 										     fr_m[r_dst]},
 										    frame_tag_x(fr_e[r_dst], fr_m[r_dst]),
-										    1'b0, 1'b0);
+										    1'b0, 1'b0,
+										    ES_SGL, FS_FRR);
 										fst <= F_IDLE;
 									end
 								end
@@ -1204,7 +1286,8 @@ always @(posedge clk) begin
 										    {fr_s[r_dst], fr_e[r_dst], 16'd0,
 										     fr_m[r_dst]},
 										    frame_tag_x(fr_e[r_dst], fr_m[r_dst]),
-										    1'b0, 1'b0);
+										    1'b0, 1'b0,
+										    ES_DBL, FS_FRR);
 										fst <= F_IDLE;
 									end
 								end
@@ -1241,7 +1324,8 @@ always @(posedge clk) begin
 									    {fr_s[r_dst], fr_e[r_dst], 16'd0,
 									     fr_m[r_dst]},
 									    frame_tag_x(fr_e[r_dst], fr_m[r_dst]),
-									    1'b0, 1'b0);
+									    1'b0, 1'b0,
+									    ES_RX, FS_FRR);
 									fst <= F_IDLE;
 								end
 							end
@@ -1318,7 +1402,8 @@ always @(posedge clk) begin
 					capture_unimp({3'b010, r_fmt, r_dst, r_op},
 					               {a_s, a_e[14:0], 16'd0, a_m}, r_stag,
 					               {fr_s[r_dst], fr_e[r_dst], 16'd0, fr_m[r_dst]},
-					               frame_tag_x(fr_e[r_dst], fr_m[r_dst]));
+					               frame_tag_x(fr_e[r_dst], fr_m[r_dst]),
+					               ES_A, FS_FRR);
 					r_unimp <= 0;
 					fst <= F_IDLE;
 				end
@@ -1334,7 +1419,8 @@ always @(posedge clk) begin
 					    {a_s, a_e[14:0], 16'd0, a_m}, r_stag,
 					    {fr_s[r_dst], fr_e[r_dst], 16'd0, fr_m[r_dst]},
 					    frame_tag_x(fr_e[r_dst], fr_m[r_dst]),
-					    1'b0, 1'b0);
+					    1'b0, 1'b0,
+					    ES_A, FS_FRR);
 					fst <= F_IDLE;
 				end
 				else begin
@@ -1411,7 +1497,8 @@ always @(posedge clk) begin
 					    {a_s, a_e[14:0], 16'd0, a_m}, r_stag,
 					    {fr_s[r_dst], fr_e[r_dst], 16'd0, fr_m[r_dst]},
 					    frame_tag_x(fr_e[r_dst], fr_m[r_dst]),
-					    1'b0, 1'b0);
+					    1'b0, 1'b0,
+					    ES_A, FS_FRR);
 					fst <= F_IDLE;
 				end
 				else begin
@@ -2292,6 +2379,109 @@ always @(posedge clk) begin
 
 			default: fst <= F_IDLE;
 		endcase
+
+		// (XC7) the frame registers' one write per field: the source the
+		// last writer of this clock named (see fx_es above)
+		if (XC7) begin
+			if (fx_es != ES_HOLD) begin : x7_e
+				reg [15:0] c1;
+				case (fx_es)
+					ES_FR, ES_ZERO, ES_PK:
+						c1 = frame_cmd1({op_class, src_fmt, dst_r, opmode});
+					ES_SHS:
+						c1 = frame_cmd1(sh_cmd);
+					default:
+						c1 = frame_cmd1({3'b010, r_fmt, r_dst, r_op});
+				endcase
+				fstate_cmd1 <= (fx_es == ES_RST) ? frestore_cmd1 : c1;
+				fstate_cmd3 <= (fx_es == ES_RST) ? frestore_cmd3 : frame_cmd3(c1);
+				case (fx_es)
+					ES_FR: begin
+						fstate_et   <= {fr_s[src_r], fr_e[src_r], 16'd0, fr_m[src_r]};
+						fstate_stag <= frame_tag_x(fr_e[src_r], fr_m[src_r]);
+					end
+					ES_ZERO: begin
+						fstate_et   <= 96'd0;
+						fstate_stag <= 3'd1;
+					end
+					ES_PK: begin
+						fstate_et   <= {32'd0, din[63:0]};
+						fstate_stag <= 3'd7;
+					end
+					ES_A: begin
+						fstate_et   <= {a_s, a_e[14:0], 16'd0, a_m};
+						fstate_stag <= r_stag;
+					end
+					ES_SGL: begin
+						fstate_et   <= {r_din[95], 15'h3F80, 16'd0, 1'b0, r_din[86:64], 40'd0};
+						fstate_stag <= 3'd5;
+					end
+					ES_DBL: begin
+						fstate_et   <= {r_din[95], 15'h3C00, 16'd0, 1'b0, r_din[83:32], 11'd0};
+						fstate_stag <= 3'd5;
+					end
+					ES_RX: begin
+						fstate_et   <= {r_din[95], r_din[94:80], 16'd0, r_din[63:0]};
+						fstate_stag <= frame_tag_x(r_din[94:80], r_din[63:0]);
+					end
+					ES_SHS: begin
+						fstate_et   <= sh_src;
+						fstate_stag <= sh_stag;
+					end
+					default: begin   // ES_RST
+						fstate_et   <= frestore_et;
+						fstate_stag <= frestore_stag;
+					end
+				endcase
+			end
+			if (fx_fs != FS_HOLD) begin
+				case (fx_fs)
+					FS_FRS: begin
+						fstate_fpt  <= {fr_s[src_r], fr_e[src_r], 16'd0, fr_m[src_r]};
+						fstate_dtag <= frame_tag_x(fr_e[src_r], fr_m[src_r]);
+					end
+					FS_FRD: begin
+						fstate_fpt  <= {fr_s[dst_r], fr_e[dst_r], 16'd0, fr_m[dst_r]};
+						fstate_dtag <= frame_tag_x(fr_e[dst_r], fr_m[dst_r]);
+					end
+					FS_FRR: begin
+						fstate_fpt  <= {fr_s[r_dst], fr_e[r_dst], 16'd0, fr_m[r_dst]};
+						fstate_dtag <= frame_tag_x(fr_e[r_dst], fr_m[r_dst]);
+					end
+					FS_PK: begin
+						fstate_fpt  <= {32'd0, din[63:32], din[95:64]};
+						fstate_dtag <= 3'd0;
+					end
+					FS_SHD: begin
+						fstate_fpt  <= sh_dst;
+						fstate_dtag <= sh_dtag;
+					end
+					FS_RST: begin
+						fstate_fpt  <= frestore_fpt;
+						fstate_dtag <= frestore_dtag;
+					end
+					default: begin   // FS_ZERO
+						fstate_fpt  <= 96'd0;
+						fstate_dtag <= 3'd0;
+					end
+				endcase
+			end
+			case (fx_ws)
+				WS_DT: begin
+					fstate_wbt     <= 96'd0;
+					fstate_fpiar_c <= ia_we ? ia_wdata : fpiar;
+				end
+				WS_P2: begin
+					fstate_wbt     <= {wb_s, wb_e[14:0], 16'd0, wb_m};
+					fstate_fpiar_c <= fpiar;
+				end
+				WS_RST: begin
+					fstate_wbt     <= frestore_wbt;
+					fstate_fpiar_c <= frestore_fpiar;
+				end
+				default: ;
+			endcase
+		end
 	end
 end
 
