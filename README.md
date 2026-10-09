@@ -84,13 +84,17 @@ all 0 (off) by default:
 | `AP040_WALLOC` | a one-piece store that misses a CM = 01 page fills its line and stays in the cache, dirty (write-allocate; needs `AP040_COPYBACK`) | 0 |
 | `AP040_BTB` | IF's branch target buffer | 0 |
 | `AP040_MISPLIT` | splits misaligned transfers into aligned pieces | 0 |
-| `AP040_XC7` | Xilinx 7-series only: the data cache's valid, round-robin and dirty tables in distributed RAM instead of flip-flops (same clock counts; about 3,300 fewer LUTs on the XC7A100T). 0 keeps the vendor-neutral flip-flop tables (Intel builds) | 0 (until its board build is proven) |
+| `AP040_XC7` | Xilinx 7-series only: the data cache's valid, round-robin and dirty tables in distributed RAM instead of flip-flops (same clock counts; about 3,300 fewer LUTs on the XC7A100T). 0 keeps the vendor-neutral flip-flop tables (Intel builds) | 0 (its board build fails at boot, see below) |
 
 With the MMU on, `AP040_SB_MMU` posts only into the DDR3 board's window
 (`mem_postok` in `ap040_pipe_tg68k_compat.v`): posting into the SDRAM as well
 corrupted data on the board while every simulation passed, and that cause is
 still open. `AP040_MISPLIT` gains nothing on the board and is not used;
 `AP040_DFP_MIS` replaces it.
+
+The XC7=1 board image (2026-10-09) stops at boot with #80000004 /
+#80000005, while the same build with XC7=0 runs. Every simulation listed
+below passes with it on, so the cause is open; keep it off.
 
 `AP040_XC7` changes where three small tables live, not what they do: the
 cache's valid and round-robin bits go into `rtl/compat/ap040_xc7_ram2w.v`
