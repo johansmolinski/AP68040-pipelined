@@ -86,10 +86,11 @@ module ap040_pipe_tg68k_compat
 	// and stays in the cache, dirty.  Needs AP040_COPYBACK = 1.  0: a
 	// copyback store miss writes through, as before.
 	parameter AP040_WALLOC       = 0,
-	// Xilinx 7-series resource mapping: the data cache's valid, round-robin
-	// and dirty tables in distributed RAM (LUTRAM) instead of flip-flops,
-	// same clock counts.  0: the vendor-neutral flip-flop forms, exactly as
-	// before -- what the Intel builds use.
+	// Xilinx 7-series resource mapping (findings xc7), same clock counts:
+	// the data cache's valid, round-robin and dirty tables in distributed RAM
+	// (LUTRAM) instead of flip-flops, and the FPU's FSAVE/FRESTORE frame
+	// registers written through one encoded selector per field.  0: the
+	// vendor-neutral forms, exactly as before -- what the Intel builds use.
 	parameter AP040_XC7          = 0
 )
 (

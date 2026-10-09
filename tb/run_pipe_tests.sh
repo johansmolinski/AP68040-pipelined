@@ -31,6 +31,7 @@ SBDEF="${PIPE_STORE_BUF:+-DSTORE_BUF=$PIPE_STORE_BUF} ${PIPE_FWD:+-DFWD=$PIPE_FW
 # PIPE_PRECISE=1 / PIPE_MISPLIT=1: address-precise fast reads, misaligned transfers split (catchup)
 # PIPE_RAS=1: ID's return-address stack (findings/catchup/plan.md step 2), every bench
 # PIPE_FWD=1: the wrapper benches with store-to-load forwarding (findings/catchup/plan.md)
+# PIPE_XC7=1: the Artix-7 resource-mapping forms (AP040_XC7; findings xc7)
 
 # milestone benches (1-17)
 TESTS="nop moveq add bra bcc bccw bccl scc dbcc move_mem move_disp jmp bsr jsr exc sup rts_rte addrerr"
