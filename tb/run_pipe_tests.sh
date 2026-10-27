@@ -294,7 +294,7 @@ if [ -n "$AP040_REF" ] && [ -f "$AP040_REF/tb/asm/t_integer.s" ] && command -v v
 	# landing on an instruction past P_START with no read in flight.  The
 	# failure is a WEDGE, so it gets a short phase timeout (it passes in
 	# 180k clocks) instead of the bench's 20M default.
-	for t in t_integer t_cache t_bitfield_mmu t_mmu_m9s t_mmu_pipe t_rmw_wp texc_m9t t_irq_pipe t_mbit_pipe t_trirq_pipe t_ipend_pipe t_irqwedge_pipe t_irqlat_pipe t_icache_pipe t_earlydrop_pipe t_specread_pipe t_dcache_pipe t_sbuf_pipe t_fwd_pipe t_sbmmu_pipe t_cb_pipe t_cbtab_pipe t_cbsnp_pipe t_specexc_pipe t_dfpmis_pipe t_cbwa_pipe $TMR; do
+	for t in t_integer t_cache t_bitfield_mmu t_mmu_m9s t_mmu_pipe t_rmw_wp texc_m9t t_irq_pipe t_mbit_pipe t_trirq_pipe t_ipend_pipe t_irqwedge_pipe t_irqlat_pipe t_fpirq_pipe t_icache_pipe t_earlydrop_pipe t_specread_pipe t_dcache_pipe t_sbuf_pipe t_fwd_pipe t_sbmmu_pipe t_cb_pipe t_cbtab_pipe t_cbsnp_pipe t_specexc_pipe t_dfpmis_pipe t_cbwa_pipe $TMR; do
 		if [ "$t" = t_mmu_m9s ] || [ "$t" = t_movem_restart_m9s ] || [ "$t" = texc_m9t ]; then
 			vasmm68k_mot -Fbin -m68040 -no-opt -quiet -o "$WORK/$t.bin" "$WORK/$t.s"
 		elif [ "$t" = t_mmu_pipe ] || [ "$t" = t_rmw_wp ]; then
@@ -302,7 +302,7 @@ if [ -n "$AP040_REF" ] && [ -f "$AP040_REF/tb/asm/t_integer.s" ] && command -v v
 		elif [ "$t" = t_icache_pipe ] || [ "$t" = t_earlydrop_pipe ] || [ "$t" = t_specread_pipe ] || [ "$t" = t_dcache_pipe ] || [ "$t" = t_sbuf_pipe ] || [ "$t" = t_fwd_pipe ] || [ "$t" = t_sbmmu_pipe ] || [ "$t" = t_cb_pipe ] || [ "$t" = t_cbtab_pipe ] || [ "$t" = t_cbsnp_pipe ] || [ "$t" = t_specexc_pipe ] || [ "$t" = t_dfpmis_pipe ] || [ "$t" = t_cbwa_pipe ]; then
 			# plan M14: the pipelined instruction read path's coherency rules
 			vasmm68k_mot -Fbin -m68040 -no-opt -quiet -o "$WORK/$t.bin" "cache_asm/$t.s"
-		elif [ "$t" = t_irq_pipe ] || [ "$t" = t_mbit_pipe ] || [ "$t" = t_trirq_pipe ] || [ "$t" = t_ipend_pipe ] || [ "$t" = t_irqwedge_pipe ] || [ "$t" = t_irqlat_pipe ]; then
+		elif [ "$t" = t_irq_pipe ] || [ "$t" = t_mbit_pipe ] || [ "$t" = t_trirq_pipe ] || [ "$t" = t_ipend_pipe ] || [ "$t" = t_irqwedge_pipe ] || [ "$t" = t_irqlat_pipe ] || [ "$t" = t_fpirq_pipe ]; then
 			vasmm68k_mot -Fbin -m68040 -no-opt -quiet -o "$WORK/$t.bin" "irq_asm/$t.s"
 		elif [ "$t" = t_fpu_resume ] || [ "$t" = t_fpu_frames ]; then
 			( cd "$AP040_MAIN/tb/asm" && vasmm68k_mot -Fbin -m68040 -no-opt -quiet -o "$OLDPWD/$WORK/$t.bin" "$t.s" )
@@ -311,6 +311,7 @@ if [ -n "$AP040_REF" ] && [ -f "$AP040_REF/tb/asm/t_integer.s" ] && command -v v
 		fi
 		python3 bin2hex.py "$WORK/$t.bin" "$WORK/$t.hex"
 		tmo=""; [ "$t" = t_irqwedge_pipe ] && tmo="+timeout=2000000"
+		[ "$t" = t_fpirq_pipe ] && tmo="+timeout=1000000"	# a lost FP `done` wedges too
 		if timeout 1800 vvp "$WORK/tb_compat.vvp" +prog="$WORK/$t.hex" $tmo > "$WORK/compat_$t.log" 2>&1 &&
 		   grep -q "ALL TESTS PASSED" "$WORK/compat_$t.log"; then
 			echo "  pass  compat:$t"
