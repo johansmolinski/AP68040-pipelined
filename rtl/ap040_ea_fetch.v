@@ -2585,11 +2585,30 @@ always @(posedge clk) begin
 			bf_step <= 1'b0; mm_have <= 1'b0; mm_empty <= 1'b0; mm_tail <= 1'b0;
 			done_smi <= 1'b0; done_dmi <= 1'b0; done_sld <= 1'b0; done_dld <= 1'b0;
 			if (rd_pend && !rd_ack) rd_drop <= 1'b1;
+			// a RELEASED FP operation does not stop for a fault behind it:
+			// its `done` and its exception are taken here as in the normal
+			// path below (M10.1(c), M10.3)
+			if (HAS_FPU != 0 && fp_bg && fp_done) fp_bg <= 1'b0;
+			fp_pcap <= 1'b0;
+			if (HAS_FPU != 0 && fp_exc_req && fp_bg) begin
+				fp_bg <= 1'b0; fp_pend <= 1'b1; fp_pvec <= fp_exc_vec; fp_pcap <= 1'b1;
+			end
 		end else if (flush) begin
 			ph <= P_START; bf_step <= 1'b0; mm_have <= 1'b0; mm_empty <= 1'b0; mm_tail <= 1'b0;
 			fp_req <= 1'b0;
 			done_smi <= 1'b0; done_dmi <= 1'b0; done_sld <= 1'b0; done_dld <= 1'b0;
 			if (rd_pend && !rd_ack) rd_drop <= 1'b1;
+			// a RELEASED FP operation's `done` (or enabled exception) can land
+			// in a flush clock -- an interrupt's entry redirects EX -- and the
+			// unit raises it for one clock only.  Missed here, fp_bg stayed set
+			// and the next FP instruction waited at P_START for ever (a 28-clock
+			// FDIV in a loop meets an interrupt entry within milliseconds), and
+			// fp_pcap stood through the flush, so the frame was captured again.
+			if (HAS_FPU != 0 && fp_bg && fp_done) fp_bg <= 1'b0;
+			fp_pcap <= 1'b0;
+			if (HAS_FPU != 0 && fp_exc_req && fp_bg) begin
+				fp_bg <= 1'b0; fp_pend <= 1'b1; fp_pvec <= fp_exc_vec; fp_pcap <= 1'b1;
+			end
 		end else begin
 			if (cap) begin
 				case (rd_tag)
